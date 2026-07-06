@@ -1,0 +1,16 @@
+{
+  "name": "ai-trading-simulation",
+  "version": "1.0.0",
+  "description": "AI-Assisted Trading Simulation Platform",
+  "scripts": {
+    "start": "concurrently \"npm run backend\" \"npm run ml\" \"npm run frontend\"",
+    "backend": "cd backend && npm start",
+    "ml": "cd ml-service && python app.py",
+    "frontend": "cd frontend && npm start",
+    "build": "cd frontend && npm run build",
+    "build-engine": "cd matching-engine && mkdir -p build && cd build && cmake .. && make"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

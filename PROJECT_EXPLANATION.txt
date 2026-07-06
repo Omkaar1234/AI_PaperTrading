@@ -1,0 +1,1326 @@
+AI Trading Simulation Platform - Full Project Explanation
+=========================================================
+
+This file explains the codebase in practical A-to-Z terms:
+- what each folder is for
+- which important files exist
+- which files are generated at install/build/runtime
+- how requests move through the system
+- how the frontend, backend, ML service, and C++ matching engine work together
+- what data is stored in memory vs on disk
+- which implementation details matter when reading or modifying the code
+
+
+1. High-Level Architecture
+--------------------------
+
+The project is a multi-service paper trading platform with 4 main runtime parts:
+
+1. Frontend
+- Path: frontend/
+- Technology: React
+- Role: User interface for selecting assets, viewing charts, running prediction analysis, placing orders, and viewing order book/trades.
+
+2. Backend API
+- Path: backend/
+- Technology: Node.js + Express
+- Role: Main orchestrator. It receives frontend requests, talks to the ML service over HTTP, talks to the C++ matching engine over a TCP socket, and keeps demo user/order state in memory.
+
+3. ML Service
+- Path: ml-service/
+- Technology: Python + Flask
+- Role: Fetches market data from Yahoo Finance, prepares indicators, trains models, generates predictions, and returns suggestions.
+
+4. Matching Engine
+- Path: matching-engine/
+- Technology: C++17
+- Role: Maintains per-symbol order books, matches buy/sell orders using price-time priority, supports cancellation, and logs trades to disk.
+
+At runtime the data flow is generally:
+
+Browser (frontend)
+-> HTTP to backend on port 3001
+-> backend either:
+   - calls ML service on port 5000 over HTTP
+   - or sends string commands to matching engine on port 9000 over TCP
+-> backend returns JSON to frontend
+-> frontend re-renders UI
+
+
+2. Root Directory Layout
+------------------------
+
+Main root paths:
+
+- .env
+  Central runtime configuration for ports, hosts, model settings, and trading parameters.
+
+- README.md
+  Human-readable project overview and setup guide.
+
+- package.json
+  Root Node scripts for starting backend, ML service, and frontend together.
+
+- package-lock.json
+  Lock file for root npm dependencies.
+
+- start.bat
+  Windows startup script. Installs dependencies, builds the matching engine, starts all services, writes logs, then kills processes on exit.
+
+- start.sh
+  Linux/macOS startup script. Same general purpose as start.bat.
+
+- PROJECT_EXPLANATION.txt
+  This documentation file.
+
+- trades.log
+  A root-level trade log file currently produced by the C++ matching engine because the engine constructs TradeExecutor with "trades.log" as a relative path.
+
+Main folders:
+
+- backend/
+- frontend/
+- ml-service/
+- matching-engine/
+- logs/
+- node_modules/
+
+Other folder:
+
+- .claude/
+  Local tool/editor metadata. Not part of application runtime.
+
+
+3. Config File
+--------------
+
+Path: .env
+
+Current environment variables:
+
+- BACKEND_PORT=3001
+- BACKEND_HOST=localhost
+- ML_PORT=5000
+- ML_HOST=localhost
+- MATCHING_ENGINE_PORT=9000
+- MATCHING_ENGINE_HOST=localhost
+- FRONTEND_PORT=3000
+- MODEL_TYPE=lstm
+- SEQUENCE_LENGTH=60
+- PREDICTION_THRESHOLD=0.55
+- ALPHA_VANTAGE_API_KEY=your_key_here
+- YAHOO_FINANCE_ENABLED=true
+- DEFAULT_QUANTITY=100
+- MIN_ORDER_SIZE=1
+- MAX_ORDER_SIZE=100000
+- PRICE_PRECISION=2
+
+What these affect:
+
+- backend/server.js reads backend, ML, and matching engine host/port values
+- ml-service/app.py reads ML_PORT
+- ml-service/model_trainer.py reads SEQUENCE_LENGTH
+- frontend uses its own React environment approach for REACT_APP_API_URL and otherwise defaults to localhost:3001
+
+
+4. Files Created by Install, Build, or Runtime
+----------------------------------------------
+
+These are not core handwritten source files, but they are important to understand the project lifecycle.
+
+Created during npm install:
+
+- node_modules/
+- backend/node_modules/
+- frontend/node_modules/
+
+Created during Python environment setup:
+
+- ml-service/venv/
+- ml-service/__pycache__/
+
+Created during native build:
+
+- matching-engine/build/
+- matching-engine/build/matching_engine.exe
+- matching-engine/build/Makefile and CMake-generated files
+- matching-engine/build/trades.log may also appear depending on where the binary is launched from
+
+Created during service startup/runtime:
+
+- logs/backend.log
+- logs/backend.err.log
+- logs/frontend.log
+- logs/frontend.err.log
+- logs/ml.log
+- logs/ml.err.log
+- logs/engine.log
+- logs/engine.err.log
+- trades.log
+
+Important note:
+- The root startup scripts redirect standard output/error to files in logs/.
+- The C++ engine separately writes structured ORDER and TRADE lines to trades.log through TradeLogger.
+
+
+5. Root package.json
+--------------------
+
+Path: package.json
+
+Purpose:
+- Provides convenience scripts at the repo root.
+
+Scripts:
+- npm start
+  Runs backend, ML service, and frontend concurrently.
+- npm run backend
+  Starts backend/server.js.
+- npm run ml
+  Starts ml-service/app.py.
+- npm run frontend
+  Starts the React development server.
+- npm run build
+  Builds the frontend.
+- npm run build-engine
+  Builds the C++ matching engine via CMake and make.
+
+
+6. Startup Scripts
+------------------
+
+6.1 Windows startup
+Path: start.bat
+
+What it does:
+- checks for node, python, g++
+- installs root/backend/frontend npm dependencies if missing
+- creates ml-service/venv if missing
+- installs Python requirements
+- builds matching-engine/build/matching_engine.exe
+- creates logs/
+- starts:
+  - matching engine
+  - ML service
+  - backend
+  - frontend
+- redirects output to log files in logs/
+- waits for a keypress
+- kills matching_engine.exe, node.exe, and python.exe on exit
+
+6.2 Unix startup
+Path: start.sh
+
+What it does:
+- same general steps as start.bat
+- uses background processes and shell trap cleanup
+- stores PIDs and kills them on SIGINT/SIGTERM
+
+
+7. Backend Folder
+-----------------
+
+Path: backend/
+
+Files:
+
+- backend/package.json
+  Backend-specific npm package definition.
+
+- backend/package-lock.json
+  Backend dependency lock file.
+
+- backend/server.js
+  Main Express app. This is the real backend entrypoint.
+
+- backend/services/predictionService.js
+  Lightweight service wrapper that calls ML service simple endpoints or falls back to deterministic mock predictions.
+
+- backend/services/matchingEngine.js
+  JavaScript in-memory matching engine implementation used by the simplified demo endpoints.
+
+- backend/services/tradingService.js
+  Re-export layer over matchingEngine.js for backward compatibility.
+
+
+8. Backend package.json
+-----------------------
+
+Path: backend/package.json
+
+Dependencies:
+- axios
+- cors
+- dotenv
+- express
+- uuid
+- ws
+
+Scripts:
+- npm start -> node server.js
+- npm run dev -> nodemon server.js
+
+
+9. Backend Server Detailed Explanation
+--------------------------------------
+
+Path: backend/server.js
+
+This file contains:
+
+1. Express server setup
+- Loads dotenv
+- enables CORS
+- enables JSON body parsing
+- binds to BACKEND_PORT or 3001
+
+2. Service connections
+- Builds ML service base URL from ML_HOST and ML_PORT
+- Builds matching engine socket target from MATCHING_ENGINE_HOST and MATCHING_ENGINE_PORT
+
+3. In-memory demo state
+- trades = new Map()
+- users = new Map()
+- userOrders = new Map()
+
+Important:
+- This state is not persisted to a database.
+- Restarting the backend resets users/orders kept only in backend memory.
+- A default user is inserted:
+  - id: user_001
+  - balance: 100000
+  - positions: new Map()
+
+4. MatchingEngineClient class
+- opens a TCP socket to the C++ engine
+- reconnects if disconnected
+- queues outbound messages until connected
+- sends newline-delimited string commands like:
+  PLACE_ORDER|AAPL|BUY|LIMIT|178.5|10|user_001
+- receives newline-delimited responses like:
+  SUCCESS|orderId|filledQty|remainingQty|avgFillPrice
+
+Important implementation detail:
+- Request/response correlation is simplistic.
+- sendRequest stores a "last_resolve" callback rather than a strict per-message response ID protocol.
+- That means concurrent overlapping engine requests are not robustly correlated.
+
+
+10. Backend Endpoints
+---------------------
+
+There are two families of backend endpoints:
+
+Family A: simplified demo endpoints using backend/services/matchingEngine.js
+- /predict
+- /suggest
+- /order
+- /orderbook
+- /trades
+- /orderbook/stats
+
+Family B: fuller API endpoints using the Python ML service and the C++ matching engine
+- /api/predict
+- /api/suggest
+- /api/data/:symbol
+- /api/orders
+- /api/orders/:orderId/cancel
+- /api/orderbook/:symbol
+- /api/users/:userId/orders
+- /api/users/:userId/trades
+- /api/users/:userId
+- /api/users
+- /api/stream/orderbook/:symbol
+
+Detailed behavior:
+
+10.1 GET /health
+- Returns backend status plus whether socket connection to matching engine is currently connected.
+
+10.2 POST /predict
+- Request body: { symbol }
+- Calls predictionService.getPrediction(symbol)
+- Usually hits ML service simple /predict endpoint
+- Returns simplified JSON:
+  { trend, confidence }
+
+10.3 POST /suggest
+- Request body: { symbol, prediction, currentPosition }
+- Calls predictionService.getSuggestion(...)
+- Returns simplified JSON:
+  { action }
+
+10.4 POST /order
+- Request body: { type, price, quantity }
+- Uses backend/services/tradingService.js, which delegates to the JavaScript in-memory matching engine
+- No symbol is passed, so this flow uses default symbol behavior inside matchingEngine.js
+- Returns order, trades, filled, remaining
+
+10.5 GET /orderbook
+- Returns current in-memory JavaScript order book from backend/services/matchingEngine.js
+- Structure:
+  { bids, asks, timestamp }
+
+10.6 GET /trades
+- Returns recent executed trades from backend/services/matchingEngine.js
+
+10.7 GET /orderbook/stats
+- Returns bid/ask counts, best bid/ask, spread, total trade count from the JavaScript engine
+
+10.8 POST /api/predict
+- Request body: { symbol, model_type='lstm', days=60 }
+- Forwards request to Flask ML service endpoint /api/predict
+- Returns ML service response directly
+
+10.9 POST /api/suggest
+- Request body: { symbol, prediction }
+- If prediction is missing, backend first calls ML /api/predict
+- Then backend calls ML /api/suggest
+- Returns ML service suggestion payload
+
+10.10 GET /api/data/:symbol
+- Forwards to ML service /api/data/:symbol?days=...
+- Returns historical OHLCV records
+
+10.11 POST /api/orders
+- Request body includes:
+  { symbol, side, type, price, quantity, user_id }
+- Validates side and required fields
+- For MARKET orders it first calls ML /api/data/:symbol?days=1 to get last close price
+- Checks user balance on BUY
+- Checks user position on SELL
+- Sends PLACE_ORDER command to the C++ engine
+- Parses engine response
+- Updates backend's in-memory user balance and positions
+- Saves order summary into userOrders
+- Returns:
+  {
+    success,
+    order,
+    user: { balance, positions }
+  }
+
+10.12 POST /api/orders/:orderId/cancel
+- Sends CANCEL_ORDER|symbol|orderId to the C++ engine
+- Returns success/message from engine response
+
+10.13 GET /api/orderbook/:symbol
+- Sends GET_BOOK|symbol to the C++ engine
+- Parses returned JSON string
+- Returns symbol-specific C++ book
+
+10.14 GET /api/users/:userId/orders
+- Returns backend in-memory order list for that user
+
+10.15 GET /api/users/:userId/trades
+- Scans backend trades Map for user-related trades
+- Note: backend trades Map is initialized but not meaningfully populated in current implementation
+
+10.16 GET /api/users/:userId
+- Returns backend in-memory user object
+
+10.17 POST /api/users
+- Creates a new in-memory user with UUID-derived ID
+
+10.18 GET /api/stream/orderbook/:symbol
+- Not a real WebSocket stream
+- It is a polling-friendly HTTP endpoint that wraps GET_BOOK and adds a timestamp
+
+
+11. Backend JavaScript Matching Engine
+--------------------------------------
+
+Path: backend/services/matchingEngine.js
+
+This file implements a standalone in-memory matching engine in Node.js.
+
+Data structures:
+- buyOrders: Map(symbol -> array of buy orders)
+- sellOrders: Map(symbol -> array of sell orders)
+- executedTrades: array
+
+Key classes:
+- Order
+- Trade
+
+Order behavior:
+- stores id, type, price, quantity, symbol, filled, remaining, status, timestamp, createdAt
+- fill(quantity) reduces remaining and updates status
+
+Trade behavior:
+- stores trade id, buy order id, sell order id, symbol, price, quantity, timestamp, executedAt
+
+Matching rules:
+- BUY book sorted by highest price first, earliest time first
+- SELL book sorted by lowest price first, earliest time first
+- orders cross when buy price >= sell price
+- execution price is the resting order's price
+- partial fills are supported
+
+Public functions exported through tradingService.js:
+- placeOrder
+- getOrderBook
+- getTrades
+- getOrderById
+- cancelOrder
+- clearAll
+- getOrderBookStats
+
+Why this matters:
+- The frontend still uses these simplified endpoints for /orderbook and /trades.
+- The fuller order-entry path /api/orders uses the C++ engine instead.
+- So the project currently contains two order-book paths:
+  - JavaScript demo engine
+  - C++ engine
+
+
+12. ML Service Folder
+---------------------
+
+Path: ml-service/
+
+Files:
+
+- ml-service/app.py
+  Flask app entrypoint and API definition.
+
+- ml-service/model_trainer.py
+  Trains LSTM, Ridge regression, or Random Forest models.
+
+- ml-service/prediction_engine.py
+  Converts trained models plus recent market data into next-step predictions.
+
+- ml-service/requirements.txt
+  Python dependencies.
+
+
+13. ML Service app.py
+---------------------
+
+Path: ml-service/app.py
+
+Responsibilities:
+
+1. Flask app setup
+- enables CORS
+- initializes logging
+- creates global ModelTrainer and PredictionEngine instances
+
+2. In-memory caches
+- model_cache = {}
+- data_cache = {}
+
+Cache usage:
+- model_cache key = symbol + model type
+- data_cache key = symbol + days
+- market data cache expires after 15 minutes
+
+3. Endpoints
+
+13.1 GET /health
+- basic health response
+
+13.2 POST /predict
+- simple endpoint
+- request: { symbol }
+- returns deterministic dummy prediction for the day:
+  { trend, confidence }
+- generate_dummy_prediction uses symbol + current date hash
+- this is what backend /predict is using
+
+13.3 POST /api/predict
+- full ML endpoint
+- request: { symbol, model_type, days }
+- flow:
+  1. fetch historical data from Yahoo Finance
+  2. add indicators
+  3. get cached model or train a new one
+  4. run prediction_engine.predict(...)
+  5. return symbol, trend, confidence, price_change_pct, predicted_price, current_price, model_type, timestamp
+
+13.4 POST /api/suggest
+- request includes prediction payload
+- generate_suggestion interprets trend + confidence + expected move
+- returns suggestion, reason, risk level, confidence
+
+13.5 GET /api/data/<symbol>
+- fetches historical data
+- returns normalized records:
+  date, open, high, low, close, volume
+
+13.6 POST /api/train
+- forces model retraining for a symbol/model_type
+- stores model in model_cache
+
+4. Data acquisition
+- fetch_stock_data(symbol, days)
+- uses yfinance.Ticker(symbol).history(...)
+- fetches extra history (days * 2) so indicators can be computed cleanly
+- trims to requested tail length
+
+5. Technical indicators added in add_indicators
+- SMA_5
+- SMA_20
+- SMA_50
+- RSI
+- MACD
+- MACD_Signal
+- Bollinger Band middle/upper/lower
+
+
+14. ML Model Trainer
+--------------------
+
+Path: ml-service/model_trainer.py
+
+Class: ModelTrainer
+
+Main method:
+- train_model(data, model_type)
+
+Supported model types:
+- lstm
+- regression
+- random_forest
+
+14.1 LSTM path
+- prepares features from available columns such as:
+  Close, Volume, SMA_5, SMA_20, RSI, MACD
+- scales them with MinMaxScaler
+- creates rolling sequences using SEQUENCE_LENGTH
+- builds a TensorFlow Keras Sequential model:
+  - Input
+  - LSTM(50, return_sequences=True)
+  - Dropout(0.2)
+  - LSTM(50)
+  - Dropout(0.2)
+  - Dense(25)
+  - Dense(1)
+- uses Adam optimizer and MSE loss
+- trains with validation_split=0.2 and EarlyStopping
+- if TensorFlow is unavailable or training fails, falls back to regression
+
+14.2 Regression path
+- engineers features from price returns, volatility, MA ratios, RSI, MACD, volume
+- target is next-day return
+- scales features with MinMaxScaler
+- trains sklearn Ridge(alpha=1.0)
+
+14.3 Random forest path
+- same feature engineering pattern
+- trains RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42)
+
+
+15. ML Prediction Engine
+------------------------
+
+Path: ml-service/prediction_engine.py
+
+Class: PredictionEngine
+
+Main method:
+- predict(model_data, hist_data, model_type)
+
+15.1 LSTM inference
+- extracts feature columns used during training
+- scales historical features
+- takes the last sequence_length rows
+- pads if not enough rows exist
+- runs model.predict(...)
+- inverse-transforms predicted close price
+- compares predicted_price vs current_price
+
+15.2 Regression / random forest inference
+- rebuilds the engineered feature set from historical data
+- orders feature columns to match training
+- scales latest row
+- predicts next-day return
+- converts return into predicted price
+
+15.3 Output formatting
+- _format_prediction computes:
+  - price_change
+  - price_change_pct
+  - trend: UP / DOWN / NEUTRAL
+  - confidence
+- confidence is based on magnitude of predicted move with caps/floor
+
+
+16. Matching Engine Folder
+--------------------------
+
+Path: matching-engine/
+
+Files:
+
+- matching-engine/CMakeLists.txt
+  Build configuration for the native binary.
+
+- matching-engine/include/order.hpp
+  Core order/trade structs and enums.
+
+- matching-engine/include/order_book.hpp
+  OrderBook and OrderBookManager declarations.
+
+- matching-engine/include/trade_executor.hpp
+  TradeExecutor, logger, and JSON helper declarations.
+
+- matching-engine/include/network_server.hpp
+  TCP server class declaration.
+
+- matching-engine/src/main.cpp
+  Native process entrypoint.
+
+- matching-engine/src/order_book.cpp
+  Order book storage and matching logic.
+
+- matching-engine/src/trade_executor.cpp
+  Order submission wrapper, structured logging, and JSON serialization.
+
+- matching-engine/src/network_server.cpp
+  Socket server and command parser.
+
+
+17. Matching Engine Build File
+------------------------------
+
+Path: matching-engine/CMakeLists.txt
+
+What it builds:
+- executable named matching_engine
+
+Source files compiled:
+- src/main.cpp
+- src/order_book.cpp
+- src/trade_executor.cpp
+- src/network_server.cpp
+
+Platform linkage:
+- Windows -> ws2_32
+- non-Windows -> pthread
+
+
+18. Matching Engine main.cpp
+----------------------------
+
+Path: matching-engine/src/main.cpp
+
+What it does:
+- reads optional port argument, default 9000
+- installs signal handlers
+- creates OrderBookManager
+- creates NetworkServer(manager, port)
+- starts server
+- keeps process alive in a loop while server is running
+
+
+19. Matching Engine order_book.cpp
+----------------------------------
+
+Path: matching-engine/src/order_book.cpp
+
+Core classes:
+- OrderBook
+- OrderBookManager
+
+State inside OrderBook:
+- symbol_
+- order_index_
+- buy_queue_
+- sell_queue_
+- bid_levels_
+- ask_levels_
+- cancelled_orders_
+- callbacks for trade updates and order updates
+
+Behavior:
+
+19.1 add_order
+- wraps order in shared_ptr
+- stores in order_index_
+- updates price level totals
+- immediately tries to match
+- if not fully filled, pushes remaining order into the appropriate priority queue
+
+19.2 match_order
+- BUY order checks best ask
+- SELL order checks best bid
+- MARKET orders match regardless of limit cross check
+- LIMIT orders only match when price crosses
+- always uses counter_order->price as trade price
+
+19.3 execute_trade
+- subtracts quantities
+- marks order statuses FILLED or PARTIALLY_FILLED
+- adjusts price levels
+- increments total traded volume
+- creates Trade object
+- triggers callbacks
+
+19.4 cancel_order
+- marks order CANCELLED
+- removes remaining quantity from price level totals
+- keeps ID in cancelled_orders_ so queue entries can be skipped later
+
+19.5 price levels
+- bid_levels_ and ask_levels_ aggregate quantity by price
+- get_bid_levels(depth) and get_ask_levels(depth) expose the book for JSON responses
+
+OrderBookManager behavior:
+- get_or_create_book(symbol) creates per-symbol order books lazily
+- get_book(symbol) fetches existing book
+- get_symbols() lists symbols with books
+
+
+20. Matching Engine trade_executor.cpp
+--------------------------------------
+
+Path: matching-engine/src/trade_executor.cpp
+
+Contains:
+
+20.1 TradeLogger
+- opens log file in append mode
+- writes ORDER and TRADE records
+
+ORDER log format:
+- ORDER|timestamp|action|order_id|symbol|side|type|price|quantity|remaining_qty|user_id|status
+
+TRADE log format:
+- TRADE|timestamp|trade_id|symbol|price|quantity|buy_order_id|sell_order_id|buyer_id|seller_id
+
+20.2 TradeExecutor
+- submit_order(order)
+- cancel_order(symbol, order_id)
+- generate_order_id()
+
+submit_order flow:
+1. get or create symbol order book
+2. generate order id if missing
+3. log SUBMIT
+4. attach trade callback to collect fills
+5. call book->add_order(new_order)
+6. compute average fill price and fill quantities
+7. log each resulting trade
+8. return ExecutionResult
+
+Important implementation detail:
+- submit_order calculates total_filled using the local new_order object after add_order.
+- Since add_order takes Order by value and manages its own shared copy internally, this calculation may not reflect actual remaining quantity as intended.
+- The engine still logs trades and updates the internal book, but the returned fill summary logic deserves careful review if exact reporting matters.
+
+20.3 JSON helpers
+- order_to_json
+- trade_to_json
+- order_book_to_json
+
+
+21. Matching Engine network_server.cpp
+--------------------------------------
+
+Path: matching-engine/src/network_server.cpp
+
+Purpose:
+- Runs a TCP server
+- accepts multiple client connections
+- reads newline-delimited messages
+- parses commands
+- sends newline-delimited responses
+
+Supported commands:
+
+- PLACE_ORDER
+  Params: symbol|side|type|price|quantity|user_id
+  Response: SUCCESS|orderId|filledQty|remainingQty|avgFillPrice
+
+- CANCEL_ORDER
+  Params: symbol|order_id
+  Response: SUCCESS|Order cancelled or ERROR|...
+
+- GET_BOOK
+  Params: symbol
+  Response: BOOK|{json}
+
+- GET_ORDER
+  Params: symbol|order_id
+  Response: ORDER|{json} or ORDER|null
+
+- PING
+  Response: PONG|OK
+
+Unknown command:
+- ERROR|Unknown command: ...
+
+
+22. Frontend Folder
+-------------------
+
+Path: frontend/
+
+Important files:
+
+- frontend/package.json
+- frontend/package-lock.json
+- frontend/public/index.html
+- frontend/src/index.js
+- frontend/src/App.js
+- frontend/src/App.css
+- frontend/src/constants.js
+- frontend/src/hooks/useTradingData.js
+- frontend/src/pages/DashboardPage.js
+- frontend/src/pages/PredictPage.js
+- frontend/src/pages/TradePage.js
+- frontend/src/pages/OrderBookPage.js
+- frontend/src/pages/TradesPage.js
+- frontend/src/components/Sidebar.js
+- frontend/src/components/AssetPanel.js
+- frontend/src/components/ChartCard.js
+- frontend/src/components/OrderBookCard.js
+- frontend/src/components/OrdersTable.js
+- frontend/src/components/OverviewCards.js
+- frontend/src/components/PositionsTable.js
+- frontend/src/components/PredictionCard.js
+- frontend/src/components/TradeFormCard.js
+- frontend/src/components/TradesCard.js
+
+
+23. Frontend package.json
+-------------------------
+
+Dependencies:
+- react
+- react-dom
+- react-router-dom
+- react-scripts
+- axios
+- recharts
+
+Proxy:
+- "proxy": "http://localhost:3001"
+
+Meaning:
+- during local development, frontend calls can route to backend through the React dev server if relative paths are used
+- however this app mostly uses explicit API_BASE_URL from constants.js
+
+
+24. Frontend constants.js
+-------------------------
+
+Path: frontend/src/constants.js
+
+Defines:
+- API_BASE_URL = REACT_APP_API_URL or http://localhost:3001
+- ASSET_TYPES:
+  - stocks
+  - crypto
+  - forex
+- POPULAR_ASSETS:
+  static lists of stock, crypto, and forex symbols and starter prices
+- getAssetIcon()
+  returns EQ, BTC, or FX labels
+
+
+25. Frontend App Entry
+----------------------
+
+25.1 frontend/src/index.js
+- standard React root mount
+- renders App inside router context
+
+25.2 frontend/src/App.js
+- creates shared trading state by calling useTradingData()
+- renders Sidebar plus top bar plus route content
+- routes:
+  - /dashboard
+  - /predict
+  - /trade
+  - /orderbook
+  - /trades
+- redirects / to /dashboard
+
+
+26. Frontend Shared Data Hook
+-----------------------------
+
+Path: frontend/src/hooks/useTradingData.js
+
+This is the main frontend state manager.
+
+State kept here:
+- selectedAsset
+- assetType
+- chartData
+- loading
+- user
+- positions
+- orders
+- watchlist
+- tradeMode
+- tradeQuantity
+- tradePrice
+- orderType
+- tradeSuccess
+- assetInfo
+- priceChange
+- prediction
+- suggestion
+- analyzing
+- orderBook
+- recentTrades
+
+Important functions:
+
+26.1 fetchUser
+- GET /api/users/user_001
+- loads backend in-memory user balance and positions
+
+26.2 fetchPositions
+- GET /api/users/user_001/orders
+- reconstructs positions client-side from order history
+- computes quantity, average price, and invested capital per symbol
+
+26.3 fetchOrderBook
+- GET /orderbook
+- uses simplified backend JavaScript order book, not symbol-specific C++ /api/orderbook/:symbol
+
+26.4 fetchRecentTrades
+- GET /trades?limit=20
+- uses simplified backend JavaScript trade history
+
+26.5 fetchAssetData
+- GET /api/data/:symbol?days=30
+- loads historical OHLCV from ML service via backend
+- converts records into chart data
+- if request fails, falls back to randomly generated mock chart data
+
+26.6 selectAsset
+- changes selected asset
+- updates trade price
+- clears prediction/suggestion
+- fetches new asset chart data
+
+26.7 analyzeAsset
+- POST /predict
+- then POST /suggest
+- uses simple prediction path
+- if it fails, generates a mock prediction and suggestion client-side
+
+26.8 handlePlaceOrder
+- POST /api/orders
+- used for the fuller order flow backed by the C++ engine
+- refreshes user, positions, orderbook, and trades on success
+
+26.9 placeSimpleOrder
+- POST /order
+- uses backend JavaScript demo matching engine directly
+
+Polling behavior:
+- on mount: fetches user, positions, order book, trades, and selects first stock
+- every 5 seconds:
+  - refresh selected asset data
+  - refresh user
+  - refresh positions
+  - refresh order book
+  - refresh recent trades
+
+Important architectural consequence:
+- the chart and positions are based on richer API routes
+- the order book and recent trades panels currently read from simplified JS endpoints
+- the main trade ticket /api/orders writes through the C++ engine
+- so UI data sources are mixed across two execution paths
+
+
+27. Frontend Pages
+------------------
+
+27.1 frontend/src/pages/DashboardPage.js
+- combines:
+  - OverviewCards
+  - AssetPanel
+  - ChartCard
+  - PositionsTable
+  - OrdersTable
+  - PredictionCard
+  - OrderBookCard(compact)
+
+27.2 frontend/src/pages/PredictPage.js
+- shows AssetPanel + ChartCard + PredictionCard
+
+27.3 frontend/src/pages/TradePage.js
+- shows AssetPanel + ChartCard + TradeFormCard
+
+27.4 frontend/src/pages/OrderBookPage.js
+- shows refresh button and full OrderBookCard
+
+27.5 frontend/src/pages/TradesPage.js
+- shows refresh button, TradesCard, and OrdersTable
+
+
+28. Frontend Components
+-----------------------
+
+28.1 Sidebar.js
+- left navigation and account/portfolio summary shell
+
+28.2 AssetPanel.js
+- switches between stocks/crypto/forex
+- lists POPULAR_ASSETS for current type
+- lets user select an asset
+- shows removable watchlist
+
+28.3 ChartCard.js
+- renders selected asset chart using Recharts AreaChart
+- shows current price, price change, day high, day low, volume
+
+28.4 PredictionCard.js
+- triggers analyzeAsset()
+- displays prediction trend, suggestion action, and confidence
+
+28.5 TradeFormCard.js
+- supports MARKET and LIMIT order types
+- shows quantity, limit price, estimated price, notional, buying power
+- Buy/Sell buttons call handlePlaceOrder('buy'/'sell')
+- includes a secondary "Quick Matching Engine Order" form that submits to /order
+
+28.6 OrderBookCard.js
+- renders asks and bids from orderBook state
+- compact mode limits rows
+- expects remaining quantity shape from JS matching engine order objects
+
+28.7 OverviewCards.js
+- shows portfolio value, cash balance, open orders, invested capital
+
+28.8 PositionsTable.js
+- shows client-reconstructed positions
+- clicking View sets the selected asset
+
+28.9 OrdersTable.js
+- displays placed orders from backend /api/users/user_001/orders
+
+28.10 TradesCard.js
+- displays recent trades list
+
+
+29. End-to-End Data Flows
+-------------------------
+
+29.1 Asset chart flow
+
+User selects asset in frontend
+-> useTradingData.selectAsset()
+-> GET http://localhost:3001/api/data/:symbol?days=30
+-> backend forwards to ML service
+-> ML service fetches Yahoo Finance data
+-> ML service adds indicators and returns OHLCV rows
+-> backend returns JSON
+-> frontend formats rows into chartData and assetInfo
+
+29.2 Simple prediction flow
+
+User clicks Analyze
+-> frontend POST /predict with { symbol }
+-> backend predictionService.getPrediction(symbol)
+-> backend POSTs to ML service /predict
+-> ML simple endpoint returns deterministic dummy trend/confidence
+-> frontend POSTs /suggest with symbol + returned prediction
+-> backend predictionService.getSuggestion(...)
+-> frontend shows trend, action, confidence
+
+29.3 Full ML prediction flow
+
+Client or future UI calls /api/predict
+-> backend forwards to ML /api/predict
+-> ML fetches historical Yahoo Finance data
+-> ML adds indicators
+-> ML trains or retrieves cached model
+-> PredictionEngine predicts next movement
+-> ML returns predicted_price/current_price/trend/confidence
+-> backend returns that response
+
+29.4 Full order placement flow using C++ engine
+
+User presses Buy or Sell in TradeFormCard
+-> frontend handlePlaceOrder()
+-> POST /api/orders
+-> backend validates fields
+-> for MARKET orders backend fetches current price from ML /api/data/:symbol?days=1
+-> backend checks user balance or existing positions
+-> backend sends TCP message:
+   PLACE_ORDER|symbol|side|type|price|quantity|user_id
+-> C++ engine network server parses command
+-> TradeExecutor submits order into symbol order book
+-> OrderBook attempts immediate matching
+-> TradeExecutor logs ORDER and TRADE lines
+-> engine responds SUCCESS|...
+-> backend updates in-memory user balance and positions
+-> backend stores order summary in userOrders
+-> frontend refreshes user/orders/trades/orderbook data
+
+29.5 Simplified order placement flow using backend JavaScript engine
+
+User submits quick order form
+-> frontend POST /order
+-> backend tradingService.placeOrder(...)
+-> backend JS matchingEngine.js updates in-memory JS order books
+-> backend returns order/trade data
+-> frontend refreshes simplified /orderbook and /trades
+
+29.6 Order book display flow in current frontend
+
+OrderBookCard refresh
+-> frontend GET /orderbook
+-> backend JS matchingEngine.js returns default symbol book
+-> frontend renders bids/asks
+
+Important:
+- This is not the same path as /api/orderbook/:symbol from the C++ engine.
+
+29.7 Trades display flow in current frontend
+
+TradesCard refresh
+-> frontend GET /trades?limit=20
+-> backend JS matchingEngine.js returns executedTrades array
+-> frontend renders recent trades
+
+
+30. What Is Stored Where
+------------------------
+
+Stored in backend memory:
+- users Map
+- userOrders Map
+- simplified JS order books
+- simplified JS executedTrades array
+
+Stored in ML service memory:
+- model_cache
+- data_cache
+
+Stored in C++ engine memory:
+- per-symbol order books
+- priority queues
+- price levels
+- order indices
+- cancellation markers
+
+Stored on disk:
+- logs/*.log from process stdout/stderr
+- trades.log from native trade logger
+- matching-engine/build/* from native compilation
+- node_modules and venv dependency trees
+
+Not persisted in a database:
+- users
+- balances
+- positions
+- orders
+- C++ order book state
+- ML caches
+
+Consequence:
+- restarting processes resets important state
+
+
+31. Important Behavioral Details and Caveats
+--------------------------------------------
+
+1. The repository currently has two matching paths.
+- Simple endpoints use backend JavaScript matchingEngine.js.
+- Full API order placement uses the C++ engine.
+- This creates mixed data sources in the UI.
+
+2. The frontend order book/trades views currently call simplified endpoints.
+- /orderbook and /trades come from backend JS engine.
+- /api/orders writes through the C++ engine.
+- If you expect one unified book/trade stream, the code does not fully do that yet.
+
+3. User state is purely in memory.
+- Balances, positions, and orders disappear on backend restart.
+
+4. ML simple /predict is dummy logic.
+- The simple endpoint returns deterministic fake predictions for the day.
+- The richer ML path is /api/predict.
+
+5. MatchingEngineClient in backend has weak response correlation.
+- It is fine for sequential usage but not designed for heavy concurrent request multiplexing.
+
+6. C++ submit_order fill reporting needs review.
+- The internal matching still happens, but returned fill accounting logic should be double-checked.
+
+7. The frontend reconstructs positions from order history instead of fetching a dedicated holdings ledger.
+
+
+32. File-by-File Purpose Summary
+--------------------------------
+
+Root:
+- .env -> ports and runtime settings
+- README.md -> project overview
+- package.json -> root scripts
+- start.bat -> Windows bootstrap/startup
+- start.sh -> Unix bootstrap/startup
+- PROJECT_EXPLANATION.txt -> full codebase explanation
+- trades.log -> runtime trade log
+
+Backend:
+- backend/server.js -> HTTP API + orchestration
+- backend/services/predictionService.js -> simple prediction wrapper/fallback
+- backend/services/matchingEngine.js -> JS order book engine
+- backend/services/tradingService.js -> compatibility export wrapper
+
+Frontend:
+- frontend/src/index.js -> React bootstrap
+- frontend/src/App.js -> layout + routes
+- frontend/src/App.css -> styling
+- frontend/src/constants.js -> API URL + asset definitions
+- frontend/src/hooks/useTradingData.js -> shared data/state/actions
+- frontend/src/pages/*.js -> route-level screens
+- frontend/src/components/*.js -> reusable UI blocks
+- frontend/public/index.html -> HTML shell
+
+ML:
+- ml-service/app.py -> Flask APIs and data fetch/cache
+- ml-service/model_trainer.py -> model training
+- ml-service/prediction_engine.py -> prediction generation
+- ml-service/requirements.txt -> Python deps
+
+Matching engine:
+- matching-engine/CMakeLists.txt -> build rules
+- matching-engine/include/*.hpp -> declarations
+- matching-engine/src/main.cpp -> process entry
+- matching-engine/src/order_book.cpp -> core matching
+- matching-engine/src/trade_executor.cpp -> logging/execution wrapper
+- matching-engine/src/network_server.cpp -> TCP protocol server
+
+
+33. If You Want to Extend the Project
+-------------------------------------
+
+Most likely extension points:
+
+- To unify order books and trades:
+  move frontend /orderbook and /trades calls to C++-backed /api/orderbook/:symbol and add a proper trades endpoint from the C++ engine.
+
+- To make predictions truly ML-backed in the UI:
+  make frontend analysis use /api/predict and /api/suggest instead of /predict and /suggest.
+
+- To persist trading state:
+  add a database for users, balances, orders, fills, and positions.
+
+- To make engine communication safer:
+  add request IDs to the TCP protocol and correlate responses by ID.
+
+- To make restarts safe:
+  persist engine and backend state or rebuild it from a trade/order ledger.
+
+
+34. Short Summary
+-----------------
+
+This project is a paper trading simulator with:
+- a React frontend for visualization and order entry
+- a Node/Express backend as the central coordinator
+- a Python Flask ML service for market data and predictions
+- a C++ TCP matching engine for native order book execution
+
+The codebase is functional, but it currently mixes a simplified JavaScript trading path with a more advanced C++ trading path. Understanding that split is the single most important thing when working on this repository.
