@@ -1,36 +1,49 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { useNavigate } from 'react-router-dom';
-import { API_BASE_URL, ASSET_TYPES, formatAssetPrice } from '../constants';
+import { API_BASE_URL } from '../constants';
+import MarketHeader from '../components/markets/MarketHeader';
+import MarketHeatmap from '../components/markets/MarketHeatmap';
+import MarketSearchBar from '../components/markets/MarketSearchBar';
+import MarketTable from '../components/markets/MarketTable';
+import QuickPreview from '../components/markets/QuickPreview';
+import SectorFilter from '../components/markets/SectorFilter';
+import StockCard from '../components/markets/StockCard';
+import TopMovers from '../components/markets/TopMovers';
+import Watchlist from '../components/markets/Watchlist';
+import {
+  getMarketCapBucket,
+  getStockSearchText,
+  INDIAN_FALLBACK_STOCKS,
+  isIndianListedStock,
+  normalizeIndianStock
+} from '../components/markets/marketUtils';
 
-const TYPE_OPTIONS = [
-  { label: 'All Markets', value: 'all' },
-  { label: 'NSE Stocks', value: 'stock' },
-  { label: 'Crypto', value: 'crypto' }
-];
-
-const CAP_OPTIONS = [
-  { label: 'All Caps', value: 'all' },
-  { label: 'Large Cap', value: 'large cap' },
-  { label: 'Mid Cap', value: 'mid cap' },
-  { label: 'Small Cap', value: 'small cap' }
-];
+const SORT_MAP = {
+  Company: 'name',
+  'NSE Symbol': 'symbol',
+  Price: 'price',
+  Change: 'change',
+  '%': 'changePercent',
+  Volume: 'volume',
+  'Market Cap': 'marketCap'
+};
 
 function MarketPage({ trading }) {
-  const navigate = useNavigate();
   const [query, setQuery] = useState('');
-  const [assetFilter, setAssetFilter] = useState('stock');
-  const [capFilter, setCapFilter] = useState('all');
+  const [filters, setFilters] = useState({
+    cap: 'all',
+    sector: 'All Sectors',
+    change: 'all',
+    sort: 'name'
+  });
+  const [localPage, setLocalPage] = useState(1);
   const [page, setPage] = useState(1);
   const [marketRows, setMarketRows] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 0, total: 0, hasNextPage: false });
   const [loading, setLoading] = useState(false);
-  const [searchResults, setSearchResults] = useState([]);
-
-  const watchedSymbols = useMemo(
-    () => new Set(trading.watchlistDetails.map((asset) => asset.symbol)),
-    [trading.watchlistDetails]
-  );
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [selectedStock, setSelectedStock] = useState(null);
+  const [sortKey, setSortKey] = useState('name');
 
   useEffect(() => {
     let ignore = false;
@@ -42,22 +55,31 @@ function MarketPage({ trading }) {
           params: {
             q: query || undefined,
             page,
-            limit: 25,
-            type: assetFilter === 'all' ? undefined : assetFilter,
-            exchange: assetFilter === 'stock' ? 'NSE' : undefined,
-            marketCapCategory:
-              assetFilter === 'stock' && capFilter !== 'all' ? capFilter : undefined
+            limit: 50,
+            type: 'stock',
+            exchange: 'NSE',
+            marketCapCategory: filters.cap === 'all' ? undefined : filters.cap
           }
         });
 
+        const apiRows = response.data.market || response.data.symbols || [];
         if (!ignore) {
-          setMarketRows(response.data.market || []);
-          setPagination(response.data.pagination || { page: 1, totalPages: 0, total: 0, hasNextPage: false });
+          const rows = apiRows
+            .filter(isIndianListedStock)
+            .map(normalizeIndianStock);
+          const effectiveRows = rows.length ? rows : INDIAN_FALLBACK_STOCKS.map(normalizeIndianStock);
+          setMarketRows(effectiveRows);
+          setPagination(response.data.pagination || { page: 1, totalPages: 1, total: effectiveRows.length, hasNextPage: false });
+          setSelectedStock((current) => current && effectiveRows.some((row) => row.symbol === current.symbol) ? current : effectiveRows[0] || null);
+          setLastUpdated(new Date());
         }
       } catch (error) {
         if (!ignore) {
-          setMarketRows([]);
-          setPagination({ page: 1, totalPages: 0, total: 0, hasNextPage: false });
+          const fallbackRows = INDIAN_FALLBACK_STOCKS.map(normalizeIndianStock);
+          setMarketRows(fallbackRows);
+          setPagination({ page: 1, totalPages: 1, total: fallbackRows.length, hasNextPage: false });
+          setSelectedStock((current) => current || fallbackRows[0] || null);
+          setLastUpdated(new Date());
         }
       } finally {
         if (!ignore) {
@@ -70,236 +92,154 @@ function MarketPage({ trading }) {
     return () => {
       ignore = true;
     };
-  }, [assetFilter, capFilter, page, query]);
-
-  useEffect(() => {
-    let ignore = false;
-
-    const fetchSearch = async () => {
-      const trimmed = trading.watchlistInput.trim();
-      if (!trimmed) {
-        setSearchResults([]);
-        return;
-      }
-
-      try {
-        const results = await trading.lookupSymbols(trimmed, {
-          limit: 6,
-          type: assetFilter === 'all' ? undefined : assetFilter,
-          exchange: assetFilter === 'stock' ? 'NSE' : undefined
-        });
-        if (!ignore) {
-          setSearchResults(results);
-        }
-      } catch (error) {
-        if (!ignore) {
-          setSearchResults([]);
-        }
-      }
-    };
-
-    fetchSearch();
-    return () => {
-      ignore = true;
-    };
-  }, [assetFilter, trading, trading.watchlistInput]);
+  }, [filters.cap, page, query]);
 
   useEffect(() => {
     setPage(1);
-  }, [assetFilter, capFilter, query]);
+    setLocalPage(1);
+  }, [filters.cap, filters.change, filters.sector, filters.sort, query]);
+
+  const watchedSymbols = useMemo(
+    () => new Set((trading.watchlistDetails || []).map((asset) => asset.symbol)),
+    [trading.watchlistDetails]
+  );
+
+  const filteredStocks = useMemo(() => {
+    let rows = marketRows.filter((stock) => {
+      const needle = query.trim().toLowerCase();
+      if (needle && !getStockSearchText(stock).includes(needle)) {
+        return false;
+      }
+      if (filters.cap !== 'all' && getMarketCapBucket(stock) !== filters.cap) {
+        return false;
+      }
+      if (filters.sector !== 'All Sectors' && stock.sector !== filters.sector) {
+        return false;
+      }
+      if (filters.change === 'gainers' && stock.changePercent < 0) {
+        return false;
+      }
+      if (filters.change === 'losers' && stock.changePercent >= 0) {
+        return false;
+      }
+      return true;
+    });
+
+    if (filters.change === 'active') {
+      rows = [...rows].sort((a, b) => b.volume - a.volume);
+    } else {
+      rows = [...rows].sort((a, b) => {
+        const key = sortKey || filters.sort;
+        if (key === 'name' || key === 'symbol') {
+          return String(a[key] || '').localeCompare(String(b[key] || ''));
+        }
+        return Number(b[key] || 0) - Number(a[key] || 0);
+      });
+    }
+
+    return rows;
+  }, [filters.cap, filters.change, filters.sector, filters.sort, marketRows, query, sortKey]);
+
+  const visibleStocks = useMemo(() => {
+    const pageSize = 18;
+    const start = (localPage - 1) * pageSize;
+    return filteredStocks.slice(start, start + pageSize);
+  }, [filteredStocks, localPage]);
+
+  const localTotalPages = Math.max(1, Math.ceil(filteredStocks.length / 18));
+
+  const suggestions = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) {
+      return [];
+    }
+    return marketRows.filter((stock) => getStockSearchText(stock).includes(needle));
+  }, [marketRows, query]);
+
+  const handleSort = (label) => {
+    const nextSort = SORT_MAP[label] || filters.sort;
+    setSortKey(nextSort);
+    setFilters((current) => ({ ...current, sort: nextSort }));
+  };
+
+  const handleSelectStock = (stock) => {
+    setSelectedStock(stock);
+  };
 
   return (
-    <div className="page market-page">
-      <section className="card market-toolbar">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Symbol universe</p>
-            <h3>Market Scanner</h3>
-          </div>
-          <div className="market-count">{pagination.total || 0} symbols</div>
+    <div className="page markets-page">
+          <MarketHeader totalStocks={pagination.total || filteredStocks.length} lastUpdated={lastUpdated} />
+
+      <div className="markets-discovery-layout">
+        <div className="markets-left-rail">
+          <Watchlist trading={trading} onSelectStock={handleSelectStock} />
+          <MarketHeatmap stocks={filteredStocks} />
         </div>
 
-        <div className="market-controls">
-          <input
-            type="text"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search Reliance, TCS, BTC, ETH"
+        <div className="markets-center-stage">
+          <MarketSearchBar
+            query={query}
+            onQueryChange={setQuery}
+            suggestions={suggestions}
+            onSelectSuggestion={(stock) => {
+              setSelectedStock(stock);
+              setQuery(stock.symbol);
+            }}
           />
-          <div className="segment-control market-filter-segments">
-            {TYPE_OPTIONS.map((filter) => (
-              <button
-                key={filter.value}
-                className={assetFilter === filter.value ? 'active' : ''}
-                onClick={() => setAssetFilter(filter.value)}
-              >
-                {filter.label}
-              </button>
+
+          <SectorFilter filters={filters} onFiltersChange={setFilters} />
+
+          <div className="markets-stock-strip">
+            {filteredStocks.slice(0, 6).map((stock) => (
+              <StockCard key={stock.symbol} stock={stock} active={selectedStock?.symbol === stock.symbol} onClick={handleSelectStock} />
             ))}
           </div>
-          {assetFilter !== 'crypto' ? (
-            <div className="segment-control market-filter-segments">
-              {CAP_OPTIONS.map((filter) => (
-                <button
-                  key={filter.value}
-                  className={capFilter === filter.value ? 'active' : ''}
-                  onClick={() => setCapFilter(filter.value)}
-                >
-                  {filter.label}
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      </section>
 
-      <div className="market-content-grid">
-        <section className="card market-watchlist-card">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">User watchlist</p>
-              <h3>Tracked Symbols</h3>
-            </div>
-          </div>
+            <MarketTable
+            rows={visibleStocks}
+            loading={loading}
+            watchedSymbols={watchedSymbols}
+            onSort={handleSort}
+            sortKey={Object.entries(SORT_MAP).find(([, value]) => value === sortKey)?.[0]}
+            onSelectStock={handleSelectStock}
+            onWatch={(stock) => trading.addSymbolToWatchlist(stock)}
+            trading={trading}
+          />
 
-          <div className="watchlist-composer">
-            <input
-              type="text"
-              placeholder="Search and add symbols"
-              value={trading.watchlistInput}
-              onChange={(event) => trading.setWatchlistInput(event.target.value)}
-            />
-            <button className="secondary-button" onClick={() => trading.addToWatchlist()}>
-              Add
-            </button>
-          </div>
-
-          {searchResults.length ? (
-            <div className="symbol-search-dropdown">
-              {searchResults.map((asset) => (
-                <button
-                  key={asset.symbol}
-                  className="symbol-search-item"
-                  onClick={() => trading.addToWatchlist(asset)}
-                >
-                  <strong>{asset.symbol}</strong>
-                  <span>{asset.name}</span>
-                </button>
-              ))}
-            </div>
-          ) : null}
-
-          <div className="watchlist market-watchlist">
-            {trading.watchlistDetails.length ? (
-              trading.watchlistDetails.map((asset) => (
-                <button
-                  key={asset.symbol}
-                  className={`watchlist-quote ${trading.selectedAsset?.symbol === asset.symbol ? 'active' : ''}`}
-                  onClick={() => trading.selectAsset(asset)}
-                >
-                  <div className="watchlist-quote-main">
-                    <div>
-                      <strong>{asset.symbol}</strong>
-                      <span>{asset.name}</span>
-                    </div>
-                  </div>
-                  <div className="watchlist-quote-side">
-                    <strong>{formatAssetPrice(asset.livePrice || asset.price, asset.assetType)}</strong>
-                    <span className={asset.change >= 0 ? 'text-positive' : 'text-negative'}>
-                      {asset.change >= 0 ? '+' : ''}
-                      {Number(asset.changePercent || 0).toFixed(2)}%
-                    </span>
-                  </div>
-                  <span
-                    className="watchlist-remove"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      trading.removeWatchlistSymbol(asset.symbol);
-                    }}
-                    role="button"
-                    tabIndex={0}
-                  >
-                    Remove
-                  </span>
-                </button>
-              ))
-            ) : (
-              <div className="empty-panel small">Search NSE stocks or crypto pairs to build your watchlist.</div>
-            )}
-          </div>
-        </section>
-
-        <section className="card">
-          <div className="market-list">
-            <div className="table-head neutral market-grid wide">
-              <span>Symbol</span>
-              <span>Name</span>
-              <span>Exchange</span>
-              <span>Cap</span>
-              <span>Price</span>
-              <span>Change</span>
-              <span>Action</span>
-            </div>
-
-            {marketRows.length ? (
-              marketRows.map((asset) => (
-                <div className="table-row neutral market-grid wide" key={asset.symbol}>
-                  <span>{asset.symbol}</span>
-                  <span>{asset.name}</span>
-                  <span>{asset.exchange}</span>
-                  <span>{asset.marketCapCategory || 'Unclassified'}</span>
-                  <span>{formatAssetPrice(asset.price, asset.assetType || ASSET_TYPES.STOCKS)}</span>
-                  <span className={asset.change >= 0 ? 'text-positive' : 'text-negative'}>
-                    {asset.change >= 0 ? '+' : ''}
-                    {Number(asset.changePercent || 0).toFixed(2)}%
-                  </span>
-                  <div className="market-actions">
-                    <button
-                      className="secondary-button"
-                      onClick={() => trading.addSymbolToWatchlist(asset)}
-                      disabled={watchedSymbols.has(asset.symbol)}
-                    >
-                      {watchedSymbols.has(asset.symbol) ? 'Added' : 'Watch'}
-                    </button>
-                    <button
-                      className="table-action"
-                      onClick={async () => {
-                        await trading.selectAsset(asset);
-                        navigate('/trade');
-                      }}
-                    >
-                      Trade
-                    </button>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="empty-panel">
-                {loading ? 'Loading market symbols...' : 'No symbols match the current search and filter.'}
-              </div>
-            )}
-          </div>
-
-          <div className="pagination-row">
+          <div className="pagination-row markets-pagination">
             <button
               className="secondary-button"
-              onClick={() => setPage((current) => Math.max(1, current - 1))}
-              disabled={page <= 1}
+              onClick={() => {
+                setLocalPage((current) => Math.max(1, current - 1));
+                setPage((current) => Math.max(1, current - 1));
+              }}
+              disabled={localPage <= 1 && page <= 1}
             >
               Previous
             </button>
-            <span>
-              Page {pagination.page || page} of {Math.max(1, pagination.totalPages || 1)}
-            </span>
+            <span>Page {localPage} of {localTotalPages} · {filteredStocks.length.toLocaleString('en-IN')} matches</span>
             <button
               className="secondary-button"
-              onClick={() => setPage((current) => current + 1)}
-              disabled={!pagination.hasNextPage}
+              onClick={() => {
+                if (localPage < localTotalPages) {
+                  setLocalPage((current) => current + 1);
+                } else {
+                  setPage((current) => current + 1);
+                  setLocalPage(1);
+                }
+              }}
+              disabled={localPage >= localTotalPages && !pagination.hasNextPage}
             >
               Next
             </button>
           </div>
-        </section>
+
+          <TopMovers stocks={filteredStocks} />
+        </div>
+
+        <div className="markets-preview-rail">
+          <QuickPreview stock={selectedStock} trading={trading} />
+        </div>
       </div>
     </div>
   );
