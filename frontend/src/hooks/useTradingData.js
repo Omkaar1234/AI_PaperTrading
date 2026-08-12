@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { API_BASE_URL, ASSET_TYPES } from '../constants';
 
-const DEFAULT_USER_ID = 'user_001';
 const DEFAULT_WATCHLIST = ['RELIANCE.NS', 'TCS.NS', 'INFY.NS'];
 
 function logApiFailure(context, error) {
@@ -84,7 +83,7 @@ function buildPositionsFromOrders(orders = [], quoteMap = {}) {
     });
 }
 
-export function useTradingData() {
+export function useTradingData(authenticatedUser) {
   const [selectedAsset, setSelectedAsset] = useState(null);
   const [assetType, setAssetType] = useState(ASSET_TYPES.STOCKS);
   const [chartData, setChartData] = useState([]);
@@ -112,6 +111,7 @@ export function useTradingData() {
   const [activeDockTab, setActiveDockTab] = useState('positions');
   const [portfolio, setPortfolio] = useState(null);
   const [symbolDirectory, setSymbolDirectory] = useState({});
+  const activeUserId = authenticatedUser?.id;
 
   const wsRef = useRef(null);
   const latestSelectionRef = useRef(null);
@@ -292,17 +292,29 @@ export function useTradingData() {
   }, []);
 
   const fetchUser = useCallback(async () => {
+    if (!activeUserId) {
+      setUser(null);
+      return;
+    }
+
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/users/${DEFAULT_USER_ID}`);
+      const response = await axios.get(`${API_BASE_URL}/api/users/${activeUserId}`);
       setUser(response.data);
     } catch (error) {
       logApiFailure('fetch user', error);
     }
-  }, []);
+  }, [activeUserId]);
 
   const fetchPortfolio = useCallback(async () => {
+    if (!activeUserId) {
+      setPortfolio(null);
+      setOrders([]);
+      setPositions([]);
+      return;
+    }
+
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/portfolio/${DEFAULT_USER_ID}`);
+      const response = await axios.get(`${API_BASE_URL}/api/portfolio/${activeUserId}`);
       const nextPortfolio = response.data;
       setPortfolio(nextPortfolio);
 
@@ -338,13 +350,19 @@ export function useTradingData() {
     } catch (error) {
       logApiFailure('fetch portfolio', error);
     }
-  }, [marketQuotes]);
+  }, [activeUserId, marketQuotes]);
 
   const fetchPositions = useCallback(async () => {
+    if (!activeUserId) {
+      setOrders([]);
+      setPositions([]);
+      return;
+    }
+
     try {
       const [positionsResponse, ordersResponse] = await Promise.all([
-        axios.get(`${API_BASE_URL}/api/positions/${DEFAULT_USER_ID}`),
-        axios.get(`${API_BASE_URL}/api/users/${DEFAULT_USER_ID}/orders`)
+        axios.get(`${API_BASE_URL}/api/positions/${activeUserId}`),
+        axios.get(`${API_BASE_URL}/api/users/${activeUserId}/orders`)
       ]);
 
       const nextOrders = ordersResponse.data.orders || [];
@@ -368,7 +386,7 @@ export function useTradingData() {
     } catch (error) {
       logApiFailure('fetch positions', error);
     }
-  }, [marketQuotes]);
+  }, [activeUserId, marketQuotes]);
 
   const fetchOrderBook = useCallback(async (symbol = selectedAsset?.symbol) => {
     if (!symbol) {
@@ -388,14 +406,19 @@ export function useTradingData() {
   }, [selectedAsset]);
 
   const fetchRecentTrades = useCallback(async () => {
+    if (!activeUserId) {
+      setRecentTrades([]);
+      return;
+    }
+
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/users/${DEFAULT_USER_ID}/trades`);
+      const response = await axios.get(`${API_BASE_URL}/api/users/${activeUserId}/trades`);
       setRecentTrades(response.data.trades || []);
     } catch (error) {
       logApiFailure('fetch recent trades', error);
       setRecentTrades([]);
     }
-  }, []);
+  }, [activeUserId]);
 
   const fetchQuote = useCallback(async (symbol, resolvedAssetType) => {
     if (!symbol) {
@@ -531,8 +554,12 @@ export function useTradingData() {
   }, [fetchAssetData, fetchOrderBook, fetchQuote, marketQuotes, resolveAsset]);
 
   const persistWatchlist = useCallback(async (symbols) => {
+    if (!activeUserId) {
+      return;
+    }
+
     try {
-      await axios.put(`${API_BASE_URL}/api/market/watchlist/${DEFAULT_USER_ID}`, {
+      await axios.put(`${API_BASE_URL}/api/market/watchlist/${activeUserId}`, {
         symbols: symbols.map((symbol) => ({
           symbol,
           assetType: inferAssetType(symbol)
@@ -541,7 +568,7 @@ export function useTradingData() {
     } catch (error) {
       logApiFailure('persist watchlist', error);
     }
-  }, []);
+  }, [activeUserId]);
 
   const removeWatchlistSymbol = useCallback((symbol) => {
     setWatchlist((current) => {
@@ -571,8 +598,13 @@ export function useTradingData() {
   }, [addSymbolToWatchlist, watchlistInput]);
 
   const fetchWatchlist = useCallback(async () => {
+    if (!activeUserId) {
+      setWatchlist(DEFAULT_WATCHLIST);
+      return;
+    }
+
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/market/watchlist/${DEFAULT_USER_ID}`);
+      const response = await axios.get(`${API_BASE_URL}/api/market/watchlist/${activeUserId}`);
       const nextWatchlist = normalizeWatchlistSymbols(response.data.symbols);
       const effectiveWatchlist = nextWatchlist.length ? nextWatchlist : DEFAULT_WATCHLIST;
       setWatchlist(effectiveWatchlist);
@@ -598,15 +630,24 @@ export function useTradingData() {
     } catch (error) {
       logApiFailure('fetch watchlist', error);
     }
-  }, [applyQuote, fetchSymbols, selectedAsset]);
+  }, [activeUserId, applyQuote, fetchSymbols, selectedAsset]);
 
   useEffect(() => {
+    if (!activeUserId) {
+      setUser(null);
+      setPortfolio(null);
+      setPositions([]);
+      setOrders([]);
+      setRecentTrades([]);
+      return;
+    }
+
     fetchUser();
     fetchPortfolio();
     fetchPositions();
     fetchWatchlist();
     fetchRecentTrades();
-  }, [fetchPortfolio, fetchPositions, fetchRecentTrades, fetchUser, fetchWatchlist]);
+  }, [activeUserId, fetchPortfolio, fetchPositions, fetchRecentTrades, fetchUser, fetchWatchlist]);
 
   useEffect(() => {
     selectedSymbolRef.current = selectedAsset?.symbol || null;
@@ -655,6 +696,10 @@ export function useTradingData() {
   }, [applyQuote, streamedSymbols]);
 
   useEffect(() => {
+    if (!activeUserId) {
+      return undefined;
+    }
+
     const interval = window.setInterval(() => {
       fetchPortfolio();
       fetchPositions();
@@ -669,7 +714,7 @@ export function useTradingData() {
     }, 5000);
 
     return () => window.clearInterval(interval);
-  }, [assetType, fetchAssetData, fetchOrderBook, fetchPortfolio, fetchPositions, fetchRecentTrades]);
+  }, [activeUserId, assetType, fetchAssetData, fetchOrderBook, fetchPortfolio, fetchPositions, fetchRecentTrades]);
 
   const analyzeAsset = async () => {
     if (!selectedAsset) {
@@ -725,8 +770,7 @@ export function useTradingData() {
         side: side.toUpperCase(),
         type: orderType,
         price: resolvedPrice,
-        quantity: parseInt(tradeQuantity, 10),
-        user_id: DEFAULT_USER_ID
+        quantity: parseInt(tradeQuantity, 10)
       });
 
       flashTradeMessage({
@@ -827,6 +871,7 @@ export function useTradingData() {
     orderBook,
     orders,
     orderType,
+    persistWatchlist,
     portfolio,
     positions,
     prediction,

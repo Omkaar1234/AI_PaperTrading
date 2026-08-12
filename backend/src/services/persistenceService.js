@@ -57,9 +57,14 @@ class PersistenceService {
       {
         userId: user.id,
         name: user.name || 'Paper Trader',
+        email: user.email || null,
+        age: user.age || null,
+        authProvider: user.authProvider || 'demo',
+        initialBalance: user.initialBalance ?? user.balance,
+        currentBalance: user.balance,
         wallet: {
           cashBalance: user.balance,
-          currency: user.currency || 'USD',
+          currency: user.currency || 'INR',
           buyingPower: user.balance
         }
       },
@@ -82,9 +87,10 @@ class PersistenceService {
       { userId: user.id },
       {
         userId: user.id,
+        currentBalance: user.balance,
         wallet: {
           cashBalance: user.balance,
-          currency: user.currency || 'USD',
+          currency: user.currency || 'INR',
           buyingPower: user.balance
         }
       },
@@ -106,7 +112,14 @@ class PersistenceService {
 
     return {
       id: user.userId,
+      name: user.name,
+      email: user.email,
+      age: user.age,
+      authProvider: user.authProvider,
+      initialBalance: user.initialBalance,
       balance: user.wallet?.cashBalance ?? 0,
+      currentBalance: user.currentBalance ?? user.wallet?.cashBalance ?? 0,
+      currency: user.wallet?.currency || 'INR',
       positions: objectToPositionMap(positions)
     };
   }
@@ -478,8 +491,11 @@ class PersistenceService {
     return {
       user: {
         id: user.userId,
+        name: user.name,
+        email: user.email,
         balance: user.wallet?.cashBalance ?? 0,
-        currency: user.wallet?.currency || 'USD'
+        currentBalance: user.currentBalance ?? user.wallet?.cashBalance ?? 0,
+        currency: user.wallet?.currency || 'INR'
       },
       summary: {
         cashBalance: user.wallet?.cashBalance ?? 0,

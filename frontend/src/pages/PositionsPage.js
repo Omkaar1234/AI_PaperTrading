@@ -7,7 +7,6 @@ function PositionsPage({ trading }) {
       <div className="section-heading page-heading">
         <div>
           <p className="eyebrow">Portfolio holdings</p>
-          <h2>/positions</h2>
         </div>
         <button className="secondary-button" onClick={trading.fetchPositions}>
           Refresh Positions

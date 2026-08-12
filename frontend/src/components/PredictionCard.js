@@ -25,7 +25,7 @@ function PredictionCard({ analyzing, analyzeAsset, prediction, selectedAsset, su
           <p>Confidence: {(prediction.confidence * 100).toFixed(1)}%</p>
         </div>
       ) : (
-        <div className="empty-panel">Run `/predict` and `/suggest` for the selected asset to display the AI view.</div>
+        <div className="empty-panel">Click on ANALYZE to get predictions.</div>
       )}
     </section>
   );

@@ -13,7 +13,7 @@ const primaryLinks = [
   { to: '/prediction', label: 'AI Analysis', icon: 'AI', description: 'Model signals' }
 ];
 
-function Sidebar({ collapsed, onToggle, totalPortfolioValue, user }) {
+function Sidebar({ collapsed, onToggle, totalPortfolioValue, user, authUser, onLogout }) {
   const availableCash = user?.balance || 0;
 
   return (
@@ -21,11 +21,11 @@ function Sidebar({ collapsed, onToggle, totalPortfolioValue, user }) {
       <div className="sidebar-inner">
         <div className="brand-lockup">
           <div className="brand-symbol" aria-hidden="true">
-            AS
+            U
           </div>
           <div className="brand-copy">
-            <span>NSE paper terminal</span>
-            <strong>AlphaSim</strong>
+            <span>NSE | Crypto | Forex</span>
+            <strong>UPRISE</strong>
           </div>
         </div>
 
@@ -37,7 +37,7 @@ function Sidebar({ collapsed, onToggle, totalPortfolioValue, user }) {
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             aria-pressed={collapsed}
           >
-            <span aria-hidden="true">{collapsed ? '>' : '<'}</span>
+            <span aria-hidden="true">{collapsed ? '☰' : '✕'}</span>
           </button>
         </Tooltip>
 
@@ -61,21 +61,22 @@ function Sidebar({ collapsed, onToggle, totalPortfolioValue, user }) {
         </nav>
 
         <div className="sidebar-account-card" aria-label="Account summary">
-          <span>Portfolio value</span>
+          <span>{authUser?.name || 'Portfolio value'}</span>
           <strong>{formatINR(totalPortfolioValue)}</strong>
-          <small>{formatINR(availableCash)} available cash</small>
+          <small>{authUser?.email || `${formatINR(availableCash)} available cash`}</small>
+          {authUser?.email ? <small>{formatINR(availableCash)} available cash</small> : null}
           <div className="account-meter" aria-hidden="true">
             <span style={{ width: `${Math.min(100, Math.max(12, availableCash / 10000))}%` }} />
           </div>
         </div>
 
-        <button type="button" className="sidebar-settings-button">
+        <button type="button" className="sidebar-settings-button" onClick={onLogout}>
           <span className="sidebar-link-icon" aria-hidden="true">
-            ST
+            LO
           </span>
           <span className="sidebar-link-copy">
-            <strong>Settings</strong>
-            <small>Workspace preferences</small>
+            <strong>Logout</strong>
+            <small>End secure session</small>
           </span>
         </button>
       </div>

@@ -1,18 +1,36 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
-const { v4: uuidv4 } = require('uuid');
 const net = require('net');
 const http = require('http');
 const WebSocket = require('ws');
 const path = require('path');
 const axios = require('axios');
+const crypto = require('crypto');
+const cookieParser = require('cookie-parser');
 
 // Import services
 const predictionService = require('./services/predictionService');
 const persistenceService = require('./src/services/persistenceService');
 const marketDataService = require('./src/services/marketDataService');
 const symbolSyncService = require('./src/services/symbolSyncService');
+const { optionalAuth, requireAuth } = require('./src/auth/authMiddleware');
+const {
+    GOOGLE_SETUP_COOKIE_NAME,
+    assertSessionConfigured,
+    clearCookieOptions,
+    clearSessionCookie,
+    createUser,
+    findGoogleUser,
+    linkGoogleUser,
+    loginWithPassword,
+    publicUser,
+    setSessionCookie,
+    setupCookieOptions,
+    signGoogleSetup,
+    verifyToken
+} = require('./src/auth/authService');
+const { buildGoogleAuthUrl, exchangeCodeForProfile } = require('./src/auth/googleOAuth');
 
 // Load environment variables
 dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
@@ -25,8 +43,24 @@ const MATCHING_ENGINE_HOST = process.env.MATCHING_ENGINE_HOST || 'localhost';
 const MATCHING_ENGINE_PORT = process.env.MATCHING_ENGINE_PORT || 9000;
 
 // Middleware
-app.use(cors());
+const allowedOrigins = (process.env.CORS_ORIGIN || process.env.FRONTEND_URL || 'http://localhost:3000')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+app.use(cors({
+    origin(origin, callback) {
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+            return;
+        }
+        callback(new Error('Origin not allowed by CORS'));
+    },
+    credentials: true
+}));
+app.use(cookieParser());
 app.use(express.json());
+app.use(optionalAuth);
 
 // In-memory storage for demo (use Redis/DB in production)
 const trades = new Map();
@@ -567,10 +601,184 @@ app.get('/health', (req, res) => {
     });
 });
 
+// ===================== AUTH ROUTES =====================
+
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+    res.json({ user: req.user });
+});
+
+app.post('/api/auth/register', async (req, res) => {
+    try {
+        assertSessionConfigured();
+        const { name, age, email, password, confirmPassword, initialBalance } = req.body || {};
+
+        if (password !== confirmPassword) {
+            return res.status(400).json({ error: 'Passwords do not match' });
+        }
+
+        const user = await createUser({
+            name,
+            age,
+            email,
+            password,
+            initialBalance,
+            authProvider: 'local'
+        });
+
+        users.set(user.userId, {
+            id: user.userId,
+            name: user.name,
+            email: user.email,
+            balance: user.wallet?.cashBalance ?? user.currentBalance ?? 0,
+            currency: user.wallet?.currency || 'INR',
+            positions: new Map()
+        });
+        userOrders.set(user.userId, []);
+        setSessionCookie(res, user);
+
+        res.status(201).json({ user: publicUser(user) });
+    } catch (error) {
+        const statusCode = error.statusCode || (error.code === 11000 ? 409 : 500);
+        res.status(statusCode).json({
+            error: error.code === 11000 ? 'An account with this email already exists' : error.message
+        });
+    }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        assertSessionConfigured();
+        const user = await loginWithPassword(req.body || {});
+        const hydratedUser = await persistenceService.getUser(user.userId);
+        users.set(user.userId, hydratedUser || {
+            id: user.userId,
+            name: user.name,
+            email: user.email,
+            balance: user.wallet?.cashBalance ?? user.currentBalance ?? 0,
+            currency: user.wallet?.currency || 'INR',
+            positions: new Map()
+        });
+        setSessionCookie(res, user);
+        res.json({ user: publicUser(user) });
+    } catch (error) {
+        res.status(error.statusCode || 500).json({ error: error.message });
+    }
+});
+
+app.post('/api/auth/logout', (req, res) => {
+    clearSessionCookie(res);
+    res.clearCookie(GOOGLE_SETUP_COOKIE_NAME, clearCookieOptions());
+    res.json({ success: true });
+});
+
+app.get('/api/auth/google/start', (req, res) => {
+    try {
+        assertSessionConfigured();
+        const state = crypto.randomBytes(24).toString('hex');
+        res.cookie('ptx_google_state', state, setupCookieOptions());
+        res.redirect(buildGoogleAuthUrl(state));
+    } catch (error) {
+        res.status(error.statusCode || 500).json({ error: error.message });
+    }
+});
+
+app.get('/api/auth/google/callback', async (req, res) => {
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+
+    try {
+        assertSessionConfigured();
+        if (!req.query.code || !req.query.state || req.query.state !== req.cookies?.ptx_google_state) {
+            return res.redirect(`${frontendUrl}/login?error=google_state`);
+        }
+
+        const profile = await exchangeCodeForProfile(req.query.code);
+        const existingUser = await findGoogleUser(profile);
+
+        if (existingUser) {
+            await linkGoogleUser(existingUser, profile.googleId);
+            const hydratedUser = await persistenceService.getUser(existingUser.userId);
+            users.set(existingUser.userId, hydratedUser || {
+                id: existingUser.userId,
+                name: existingUser.name,
+                email: existingUser.email,
+                balance: existingUser.wallet?.cashBalance ?? existingUser.currentBalance ?? 0,
+                currency: existingUser.wallet?.currency || 'INR',
+                positions: new Map()
+            });
+            setSessionCookie(res, existingUser);
+            res.clearCookie('ptx_google_state', clearCookieOptions());
+            return res.redirect(`${frontendUrl}/dashboard`);
+        }
+
+        const setupToken = signGoogleSetup(profile);
+        res.cookie(GOOGLE_SETUP_COOKIE_NAME, setupToken, setupCookieOptions());
+        res.clearCookie('ptx_google_state', clearCookieOptions());
+        return res.redirect(`${frontendUrl}/google-setup`);
+    } catch (error) {
+        console.error('Google auth error:', error.message);
+        return res.redirect(`${frontendUrl}/login?error=google_auth_failed`);
+    }
+});
+
+app.get('/api/auth/google/setup', async (req, res) => {
+    try {
+        const token = req.cookies?.[GOOGLE_SETUP_COOKIE_NAME];
+        if (!token) {
+            return res.status(401).json({ error: 'Google setup session expired' });
+        }
+        const profile = verifyToken(token);
+        res.json({
+            profile: {
+                name: profile.name,
+                email: profile.email
+            }
+        });
+    } catch (error) {
+        res.status(401).json({ error: 'Google setup session expired' });
+    }
+});
+
+app.post('/api/auth/google/setup', async (req, res) => {
+    try {
+        assertSessionConfigured();
+        const token = req.cookies?.[GOOGLE_SETUP_COOKIE_NAME];
+        if (!token) {
+            return res.status(401).json({ error: 'Google setup session expired' });
+        }
+        const profile = verifyToken(token);
+        const user = await createUser({
+            name: req.body.name || profile.name,
+            age: req.body.age,
+            email: profile.email,
+            initialBalance: req.body.initialBalance,
+            authProvider: 'google',
+            googleId: profile.googleId
+        });
+
+        users.set(user.userId, {
+            id: user.userId,
+            name: user.name,
+            email: user.email,
+            balance: user.wallet?.cashBalance ?? user.currentBalance ?? 0,
+            currency: user.wallet?.currency || 'INR',
+            positions: new Map()
+        });
+        userOrders.set(user.userId, []);
+        res.clearCookie(GOOGLE_SETUP_COOKIE_NAME, clearCookieOptions());
+        setSessionCookie(res, user);
+        res.status(201).json({ user: publicUser(user) });
+    } catch (error) {
+        const statusCode = error.statusCode || (error.code === 11000 ? 409 : 500);
+        res.status(statusCode).json({
+            error: error.code === 11000 ? 'An account with this email already exists' : error.message
+        });
+    }
+});
+
 // ===================== NEW API ENDPOINTS =====================
 
 // POST /predict - Simple prediction endpoint
-app.post('/predict', async (req, res) => {
+app.post('/predict', requireAuth, async (req, res) => {
     try {
         const { symbol } = req.body;
 
@@ -591,7 +799,7 @@ app.post('/predict', async (req, res) => {
 });
 
 // POST /suggest - Get trading suggestion
-app.post('/suggest', async (req, res) => {
+app.post('/suggest', requireAuth, async (req, res) => {
     try {
         const { symbol, prediction, currentPosition = 0 } = req.body;
 
@@ -617,7 +825,7 @@ app.post('/suggest', async (req, res) => {
 // POST /order - Place a simple order
 app.post('/order', async (req, res) => {
     res.status(410).json({
-        error: 'Legacy /order endpoint removed. Use POST /api/orders with symbol, side, type, price, quantity, user_id.'
+        error: 'Legacy /order endpoint removed. Use POST /api/orders with symbol, side, type, price, quantity.'
     });
 });
 
@@ -669,7 +877,7 @@ app.get('/orderbook/stats', (req, res) => {
 // ===================== PREDICTION ROUTES =====================
 
 // Get stock prediction
-app.post('/api/predict', async (req, res) => {
+app.post('/api/predict', requireAuth, async (req, res) => {
     try {
         const { symbol, model_type = 'lstm', days = 60 } = req.body;
 
@@ -695,7 +903,7 @@ app.post('/api/predict', async (req, res) => {
 });
 
 // Get investment suggestion
-app.post('/api/suggest', async (req, res) => {
+app.post('/api/suggest', requireAuth, async (req, res) => {
     try {
         const { symbol, prediction } = req.body;
 
@@ -903,13 +1111,13 @@ app.get('/api/market/candles/:symbol', async (req, res) => {
 // ===================== TRADING ROUTES =====================
 
 // Place an order
-app.post('/api/orders', async (req, res) => {
+app.post('/api/orders', requireAuth, async (req, res) => {
     try {
         const symbol = String(req.body.symbol || '').trim().toUpperCase();
         const side = String(req.body.side || '').trim().toUpperCase();
         const type = String(req.body.type || 'LIMIT').trim().toUpperCase();
         const quantity = Number(req.body.quantity);
-        const user_id = req.body.user_id || DEFAULT_USER_ID;
+        const user_id = req.user.id;
         const requestPrice = req.body.price === undefined || req.body.price === null ? null : Number(req.body.price);
 
         if (!symbol || !side || !quantity) {
@@ -1091,18 +1299,39 @@ app.post('/api/orders', async (req, res) => {
 });
 
 // Cancel an order
-app.post('/api/orders/:orderId/cancel', async (req, res) => {
+app.post('/api/orders/:orderId/cancel', requireAuth, async (req, res) => {
     try {
         const { orderId } = req.params;
+        const authenticatedUserId = req.user.id;
         let foundUserId = null;
         let targetOrder = null;
 
-        for (const [userId, orders] of userOrders.entries()) {
-            const order = orders.find((item) => item.id === orderId);
-            if (order) {
-                foundUserId = userId;
-                targetOrder = order;
-                break;
+        const runtimeOrders = userOrders.get(authenticatedUserId) || [];
+        targetOrder = runtimeOrders.find((item) => item.id === orderId);
+        foundUserId = targetOrder ? authenticatedUserId : null;
+
+        if (!targetOrder) {
+            const persistedOrder = await persistenceService.getOrderById(orderId);
+            if (persistedOrder) {
+                if (persistedOrder.userId !== authenticatedUserId) {
+                    return res.status(403).json({ error: 'Forbidden resource' });
+                }
+
+                foundUserId = authenticatedUserId;
+                targetOrder = {
+                    id: persistedOrder.orderId,
+                    symbol: persistedOrder.symbol,
+                    side: persistedOrder.side,
+                    type: persistedOrder.orderType,
+                    price: persistedOrder.price,
+                    quantity: persistedOrder.quantity,
+                    filled_qty: persistedOrder.filled_qty,
+                    remaining_qty: persistedOrder.remaining_qty,
+                    avg_fill_price: persistedOrder.avg_fill_price,
+                    user_id: persistedOrder.userId,
+                    status: persistedOrder.status,
+                    timestamp: persistedOrder.timestamp || persistedOrder.createdAt
+                };
             }
         }
 
@@ -1188,8 +1417,11 @@ app.get('/api/orderbook/:symbol', async (req, res) => {
 });
 
 // Get user's orders
-app.get('/api/users/:userId/orders', async (req, res) => {
+app.get('/api/users/:userId/orders', requireAuth, async (req, res) => {
     const { userId } = req.params;
+    if (userId !== req.user.id) {
+        return res.status(403).json({ error: 'Forbidden resource' });
+    }
     const persistedOrders = await persistenceService.getOrdersByUser(userId);
     const orders = persistedOrders.length > 0
         ? persistedOrders.map((order) => ({
@@ -1211,7 +1443,10 @@ app.get('/api/users/:userId/orders', async (req, res) => {
 });
 
 // Get user's trades
-app.get('/api/users/:userId/trades', async (req, res) => {
+app.get('/api/users/:userId/trades', requireAuth, async (req, res) => {
+    if (req.params.userId !== req.user.id) {
+        return res.status(403).json({ error: 'Forbidden resource' });
+    }
     const persistedTrades = await persistenceService.getTradesByUser(req.params.userId);
     const userTrades = persistedTrades.length > 0
         ? persistedTrades.map((trade) => projectTradeForUser({
@@ -1234,7 +1469,10 @@ app.get('/api/users/:userId/trades', async (req, res) => {
 });
 
 // Get user info
-app.get('/api/users/:userId', async (req, res) => {
+app.get('/api/users/:userId', requireAuth, async (req, res) => {
+    if (req.params.userId !== req.user.id) {
+        return res.status(403).json({ error: 'Forbidden resource' });
+    }
     const persistedUser = await persistenceService.getUser(req.params.userId);
     const user = persistedUser || users.get(req.params.userId);
     if (!user) {
@@ -1249,30 +1487,18 @@ app.get('/api/users/:userId', async (req, res) => {
 });
 
 // Create user
-app.post('/api/users', async (req, res) => {
-    const { initial_balance = 100000 } = req.body;
-    const userId = `user_${uuidv4().split('-')[0]}`;
-
-    const user = {
-        id: userId,
-        balance: initial_balance,
-        positions: new Map()
-    };
-
-    users.set(userId, user);
-    userOrders.set(userId, []);
-    await persistenceService.ensureUser(user);
-
-    res.json({
-        id: user.id,
-        balance: user.balance,
-        positions: {}
+app.post('/api/users', requireAuth, async (req, res) => {
+    res.status(410).json({
+        error: 'Legacy user creation is disabled. Use POST /api/auth/register.'
     });
 });
 
 // Get order history
-app.get('/api/orders/:userId/history', async (req, res) => {
+app.get('/api/orders/:userId/history', requireAuth, async (req, res) => {
     try {
+        if (req.params.userId !== req.user.id) {
+            return res.status(403).json({ error: 'Forbidden resource' });
+        }
         const limit = parseInt(req.query.limit, 10) || 200;
         const orders = await persistenceService.getOrdersByUser(req.params.userId, limit);
 
@@ -1302,7 +1528,7 @@ app.get('/api/orders/:userId/history', async (req, res) => {
 });
 
 // Get single order
-app.get('/api/orders/:orderId', async (req, res) => {
+app.get('/api/orders/:orderId', requireAuth, async (req, res) => {
     try {
         const runtimeOrder = Array.from(userOrders.values())
             .flat()
@@ -1328,6 +1554,10 @@ app.get('/api/orders/:orderId', async (req, res) => {
             return res.status(404).json({ error: 'Order not found' });
         }
 
+        if (order.user_id !== req.user.id) {
+            return res.status(403).json({ error: 'Forbidden resource' });
+        }
+
         res.json({ order });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -1335,8 +1565,11 @@ app.get('/api/orders/:orderId', async (req, res) => {
 });
 
 // Persisted portfolio snapshot
-app.get('/api/portfolio/:userId', async (req, res) => {
+app.get('/api/portfolio/:userId', requireAuth, async (req, res) => {
     try {
+        if (req.params.userId !== req.user.id) {
+            return res.status(403).json({ error: 'Forbidden resource' });
+        }
         const portfolio = await persistenceService.getPortfolio(req.params.userId);
 
         if (!portfolio) {
@@ -1368,8 +1601,11 @@ app.get('/api/portfolio/:userId', async (req, res) => {
 });
 
 // Get positions
-app.get('/api/positions/:userId', async (req, res) => {
+app.get('/api/positions/:userId', requireAuth, async (req, res) => {
     try {
+        if (req.params.userId !== req.user.id) {
+            return res.status(403).json({ error: 'Forbidden resource' });
+        }
         const positions = await persistenceService.getPositions(req.params.userId);
         if (positions.length === 0) {
             return res.json({
@@ -1384,8 +1620,11 @@ app.get('/api/positions/:userId', async (req, res) => {
 });
 
 // Watchlist APIs
-app.get('/api/market/watchlist/:userId', async (req, res) => {
+app.get('/api/market/watchlist/:userId', requireAuth, async (req, res) => {
     try {
+        if (req.params.userId !== req.user.id) {
+            return res.status(403).json({ error: 'Forbidden resource' });
+        }
         const watchlist = await persistenceService.getWatchlist(req.params.userId);
         const symbols = watchlist?.symbols || DEFAULT_WATCHLIST;
         const quotes = await marketDataService.getQuotes(symbols.map((entry) => entry.symbol));
@@ -1400,8 +1639,11 @@ app.get('/api/market/watchlist/:userId', async (req, res) => {
     }
 });
 
-app.put('/api/market/watchlist/:userId', async (req, res) => {
+app.put('/api/market/watchlist/:userId', requireAuth, async (req, res) => {
     try {
+        if (req.params.userId !== req.user.id) {
+            return res.status(403).json({ error: 'Forbidden resource' });
+        }
         const symbols = Array.isArray(req.body.symbols) ? req.body.symbols : [];
         const normalizedSymbols = symbols.map((entry) => ({
             symbol: entry.symbol,
@@ -1421,9 +1663,13 @@ app.put('/api/market/watchlist/:userId', async (req, res) => {
 });
 
 // Trade ingest endpoint for external engine events
-app.post('/api/trades/ingest', async (req, res) => {
+app.post('/api/trades/ingest', requireAuth, async (req, res) => {
     try {
         const payload = req.body || {};
+        if (payload.userId && payload.userId !== req.user.id) {
+            return res.status(403).json({ error: 'Forbidden resource' });
+        }
+        payload.userId = req.user.id;
 
         if (!payload.tradeId || !payload.symbol || !payload.quantity || !payload.price) {
             return res.status(400).json({

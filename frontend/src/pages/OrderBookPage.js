@@ -7,7 +7,6 @@ function OrderBookPage({ trading }) {
       <div className="section-heading page-heading">
         <div>
           <p className="eyebrow">Endpoint</p>
-          <h2>/orderbook</h2>
         </div>
         <button className="secondary-button" onClick={trading.fetchOrderBook}>
           Refresh Book

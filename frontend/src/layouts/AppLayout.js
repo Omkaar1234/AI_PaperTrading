@@ -42,7 +42,7 @@ const PAGE_META = {
   }
 };
 
-function AppLayout({ trading }) {
+function AppLayout({ trading, auth }) {
   const location = useLocation();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const meta = PAGE_META[location.pathname] || PAGE_META['/trade'];
@@ -54,10 +54,12 @@ function AppLayout({ trading }) {
         onToggle={() => setSidebarCollapsed((value) => !value)}
         totalPortfolioValue={trading.getTotalPortfolioValue()}
         user={trading.user}
+        authUser={auth.user}
+        onLogout={auth.logout}
       />
 
       <div className="workspace-shell">
-        <TopNavigation meta={meta} trading={trading} />
+        <TopNavigation meta={meta} trading={trading} auth={auth} />
         <PageFrame description={meta.description} tradeSuccess={trading.tradeSuccess}>
           <Outlet />
         </PageFrame>

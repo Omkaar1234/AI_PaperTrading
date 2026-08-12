@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { formatINR } from '../../constants';
 import { Badge, SearchBar, Tooltip } from '../ui';
 
-function TopNavigation({ meta, trading }) {
+function TopNavigation({ meta, trading, auth }) {
   const navigate = useNavigate();
   const [now, setNow] = useState(() => new Date());
   const [query, setQuery] = useState('');
@@ -55,6 +55,11 @@ function TopNavigation({ meta, trading }) {
     setStatusText('No match');
   };
 
+  const handleLogout = async () => {
+    await auth.logout();
+    navigate('/login', { replace: true });
+  };
+
   return (
     <header className="top-navigation">
       <div className="top-navigation-title">
@@ -92,12 +97,12 @@ function TopNavigation({ meta, trading }) {
 
         <button type="button" className="profile-chip" aria-label="User profile">
           <span aria-hidden="true">U</span>
-          <strong>{formatINR(trading.user?.balance || 0)}</strong>
+          <strong>{auth.user?.name || auth.user?.email || formatINR(trading.user?.balance || 0)}</strong>
         </button>
 
-        <Tooltip label="Settings">
-          <button type="button" className="icon-button" aria-label="Settings">
-            <span aria-hidden="true">ST</span>
+        <Tooltip label="Logout">
+          <button type="button" className="icon-button" aria-label="Logout" onClick={handleLogout}>
+            <span aria-hidden="true">LO</span>
           </button>
         </Tooltip>
       </div>

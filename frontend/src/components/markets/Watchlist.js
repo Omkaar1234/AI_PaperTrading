@@ -1,9 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import axios from 'axios';
-import { API_BASE_URL, formatINR } from '../../constants';
+import { formatINR } from '../../constants';
 import { normalizeIndianStock, normalizeIndianSymbol } from './marketUtils';
-
-const USER_ID = 'user_001';
 
 function Watchlist({ trading, onSelectStock }) {
   const [query, setQuery] = useState('');
@@ -21,9 +18,7 @@ function Watchlist({ trading, onSelectStock }) {
 
   const persistOrder = async (symbols) => {
     trading.setWatchlist(symbols);
-    await axios.put(`${API_BASE_URL}/api/market/watchlist/${USER_ID}`, {
-      symbols: symbols.map((symbol) => ({ symbol, assetType: 'stocks' }))
-    });
+    await trading.persistWatchlist(symbols);
   };
 
   const addSymbol = async (event) => {
