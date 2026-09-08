@@ -1,233 +1,270 @@
 # AI-Assisted Trading Simulation Platform
 
-A comprehensive trading simulation system with AI-powered predictions, a custom C++ order matching engine, and a React frontend dashboard.
+A multi-service paper trading platform supporting Indian equities (NSE/BSE) and Crypto assets with a React dashboard, Node.js API orchestrator, MongoDB persistence, Python ML analytics, and a custom C++ order matching engine.
 
-## Architecture
+---
+
+## System Architecture
 
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   React Frontend │────▶  Node.js API    │────▶  Python ML      │
-│   (Dashboard)   │     │  (Orchestrator) │     │  (Predictions) │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-                               │
+┌─────────────────────────────────────────────────────────────┐
+│                 React Frontend (Port 3000)                  │
+│       Dashboard · Markets · Trade Panel · Orders/Positions   │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ HTTP / WebSocket (/ws/market)
                                ▼
-                        ┌─────────────────┐
-                        │  C++ Matching   │
-                        │    Engine       │
-                        │ (Order Book)    │
-                        └─────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                 Node.js API (Port 3001)                     │
+│  JWT Session Auth · Market Data Aggregator · Order Routing   │
+└──────────────┬──────────────────────────────┬───────────────┘
+               │                              │
+               │ HTTP (:5000)                 │ TCP Socket (:9000)
+               ▼                              ▼
+┌─────────────────────────────┐┌──────────────────────────────┐
+│  Python ML Service (:5000)  ││ C++ Matching Engine (:9000)  │
+│  LSTM / Technical Indicators││ Price-Time Priority FIFO Book│
+└─────────────────────────────┘└──────────────────────────────┘
+               │                              │
+               └──────────────┬───────────────┘
+                              ▼
+               ┌──────────────────────────────┐
+               │    MongoDB Atlas Database    │
+               │ Users · Orders · Positions   │
+               │ Watchlists · Symbols Cache   │
+               └──────────────────────────────┘
 ```
 
-### Components
+---
 
-1. **Frontend (React)**: Trading dashboard with predictions, order book, and order placement
-2. **Backend (Node.js)**: API orchestrator connecting ML service and matching engine
-3. **ML Service (Python/Flask)**: LSTM and regression models for price prediction
-4. **Matching Engine (C++)**: High-performance order matching with price-time priority
+## Core Components
 
-## Features
+1. **Frontend (React 18 + React Router v6)**
+   - Single-page application with dark terminal aesthetic.
+   - Live trading terminal with TradingView-style candlestick charting (Recharts).
+   - Real-time order book visualizer, active positions tracker, portfolio P&L metrics, and watchlist.
+   - Complete authentication views (Login, Registration with Initial Capital Selector ₹1L–₹10L, and Google OAuth Profile Setup).
 
-- **AI Predictions**: LSTM and regression models predict stock price trends
-- **Investment Suggestions**: BUY, SELL, HOLD recommendations based on predictions
-- **Order Matching**: Custom C++ engine with price-time priority
-- **Order Book**: Real-time visualization of bid/ask levels
-- **Portfolio Tracking**: Cash balance and position management
-- **Trade Execution**: Partial and full order matching
+2. **Backend Orchestrator (Node.js + Express + WebSocket)**
+   - Central gateway for order routing, session management, and market data normalization.
+   - Persistent session authentication using HTTP-only JWT cookies (`ptx_session`) and Bcrypt password hashing.
+   - Real-time market data streaming over WebSocket (`/ws/market`) with 1-second interval broadcast.
+   - Symbol directory synchronization supporting over 2,600+ NSE/BSE stocks and Binance crypto pairs.
+   - Multi-user data isolation enforcing ownership checks on orders, positions, trades, and watchlists.
 
-## Quick Start
+3. **C++ Order Matching Engine (C++17 + POSIX/Winsock TCP Server)**
+   - High-throughput in-memory limit order book with price-time priority (FIFO).
+   - Real-time trade execution and balance settlement event generation.
+   - Bid/Ask depth aggregation and order cancellation support.
+   - Direct trade logging to disk (`trades.log`).
 
-### Prerequisites
+4. **ML Service (Python 3.11 + Flask + scikit-learn + yfinance)**
+   - Historical time-series data extraction and technical indicator computation (SMA, RSI, MACD, Bollinger Bands).
+   - Machine learning price trend classification (LSTM and linear models).
+   - Rule-based investment suggestions (`STRONG_BUY`, `BUY`, `HOLD`, `SELL`, `STRONG_SELL`).
+   - Built-in deterministic mock prediction fallback when upstream market data is unreachable.
 
-- Node.js 16+ and npm
-- Python 3.8+ with pip
-- C++ compiler (g++, MSVC, or Clang)
-- CMake 3.14+
+---
 
-### Option 1: Using Startup Script
+## Verified Features
 
-**Linux/Mac:**
+| Feature Area | Implementation Status | Description |
+|---|---|---|
+| **User Registration** | Verified Working | Name, Age (13–120), Email validation, Password complexity, and starting capital (₹1,00,000 to ₹10,00,000 in ₹1,00,000 steps). |
+| **Authentication & Sessions** | Verified Working | Secure HTTP-only JWT cookie sessions (`ptx_session`), Bcrypt hashing (12 rounds), protected API middleware. |
+| **Multi-User Isolation** | Verified Working | Strict 403 Forbidden enforcement preventing users from inspecting or modifying other users' accounts, balances, orders, or positions. |
+| **Indian Stock Market Data** | Verified Working | Live quotes, OHLCV candlestick data, and search across 2,600+ NSE symbols via Yahoo Finance integration. |
+| **Watchlist Management** | Verified Working | Per-user custom watchlists with database persistence and real-time quote streaming. |
+| **Order Book & Limit Orders** | Verified Working | C++ engine resting orders, bid/ask depth visualization, and order cancellation with balance refund. |
+| **Trade Execution & P&L** | Verified Working | Price-time priority matching, position updates, cash balance settlement, and realized/unrealized P&L calculations. |
+| **Live WebSocket Streaming** | Verified Working | Client subscription to ticker streams via `ws://localhost:3001/ws/market`. |
+| **AI Suggestions & Fallback**| Verified Working | Recommendation engine with automatic deterministic mock fallback when live ML data feeds encounter upstream rate limits. |
+
+---
+
+## Prerequisites
+
+- **Node.js**: v18.0+ or v20.0+ (npm 9+)
+- **Python**: v3.9+ or v3.11+
+- **C++ Compiler**: GCC/MinGW (g++ 9+) or MSVC with C++17 support
+- **CMake**: v3.14+
+- **MongoDB**: Active MongoDB Atlas cluster or local MongoDB instance
+
+---
+
+## Setup & Startup Instructions
+
+### 1. Environment Configuration
+
+Create or verify the `.env` file in the project root:
+
+```env
+# JWT Secret Key
+JWT_SECRET=your_secure_jwt_secret_here
+
+# Backend API
+BACKEND_PORT=3001
+BACKEND_HOST=0.0.0.0
+
+# Service Connections (Use localhost for bare-metal, or service names for Docker)
+MATCHING_ENGINE_HOST=localhost
+MATCHING_ENGINE_PORT=9000
+ML_HOST=localhost
+ML_PORT=5000
+
+# Frontend
+FRONTEND_PORT=3000
+CORS_ORIGIN=http://localhost:3000
+
+# Database
+MONGODB_URI=mongodb+srv://<username>:<password>@<cluster>.mongodb.net/?appName=Cluster0
+MONGODB_DB=PaperTrading
+
+# Google OAuth (Optional)
+GOOGLE_CLIENT_ID=your_google_client_id
+GOOGLE_CLIENT_SECRET=your_google_client_secret
+GOOGLE_CALLBACK_URL=http://localhost:3001/api/auth/google/callback
+```
+
+> **Important Note for Local / Bare-Metal Execution**: Ensure `MATCHING_ENGINE_HOST=localhost` and `ML_HOST=localhost` in `.env` when running outside Docker.
+
+---
+
+### 2. Service Startup
+
+#### Automated Startup (Windows)
+```cmd
+start.bat
+```
+
+#### Automated Startup (Linux / macOS)
 ```bash
 chmod +x start.sh
 ./start.sh
 ```
 
-**Windows:**
-```cmd
-start.bat
-```
+#### Manual Step-by-Step Startup
 
-### Option 2: Manual Setup
+1. **Install Dependencies:**
+   ```bash
+   npm install
+   cd backend && npm install && cd ..
+   cd frontend && npm install && cd ..
+   ```
 
-1. **Install dependencies:**
-```bash
-npm install
-cd backend && npm install && cd ..
-cd frontend && npm install && cd ..
-```
+2. **Set up Python Virtual Environment:**
+   ```bash
+   cd ml-service
+   python -m venv venv
+   # Windows:
+   .\venv\Scripts\activate
+   # Linux/macOS:
+   source venv/bin/activate
+   pip install -r requirements.txt
+   cd ..
+   ```
 
-2. **Setup Python environment:**
-```bash
-cd ml-service
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-cd ..
-```
+3. **Build C++ Matching Engine:**
+   ```bash
+   cd matching-engine
+   mkdir build && cd build
+   cmake .. -DCMAKE_BUILD_TYPE=Release
+   cmake --build . --config Release
+   cd ../..
+   ```
 
-3. **Build C++ matching engine:**
-```bash
-cd matching-engine
-mkdir build && cd build
-cmake ..
-make -j4
-cd ../..
-```
+4. **Launch All Services (In separate terminals):**
 
-4. **Start services (in separate terminals):**
-```bash
-# Matching Engine
-./matching-engine/build/matching_engine
+   * **Terminal 1 (Matching Engine):**
+     ```bash
+     # Windows:
+     .\matching-engine\build\matching_engine.exe 9000
+     # Linux/macOS:
+     ./matching-engine/build/matching_engine 9000
+     ```
 
-# ML Service
-cd ml-service && source venv/bin/activate && python app.py
+   * **Terminal 2 (Python ML Service):**
+     ```bash
+     cd ml-service
+     .\venv\Scripts\python.exe app.py
+     ```
 
-# Backend
-cd backend && node server.js
+   * **Terminal 3 (Node.js Backend):**
+     ```bash
+     cd backend
+     node server.js
+     ```
 
-# Frontend
-cd frontend && npm start
-```
+   * **Terminal 4 (React Frontend):**
+     ```bash
+     cd frontend
+     npm start
+     ```
 
-## Usage
+---
 
-1. Open http://localhost:3000 in your browser
-2. Enter a stock symbol (e.g., AAPL, MSFT, GOOGL)
-3. Click "Analyze" to fetch AI prediction
-4. Review the trend and investment suggestion
-5. Place buy/sell orders using the order form
-6. Watch the order book update in real-time
+## API Reference
 
-## API Endpoints
+### Authentication Endpoints
 
-### Backend API (http://localhost:3001)
+| Method | Endpoint | Access | Description |
+|---|---|---|---|
+| `POST` | `/api/auth/register` | Public | Register new user with initial paper balance |
+| `POST` | `/api/auth/login` | Public | Authenticate with email and password |
+| `POST` | `/api/auth/logout` | Public | Invalidate session and clear auth cookies |
+| `GET` | `/api/auth/me` | Authenticated | Retrieve authenticated user profile |
+| `GET` | `/api/auth/google/start` | Public | Initiate Google OAuth redirect flow |
+| `GET` | `/api/auth/google/callback` | Public | OAuth callback handler |
+| `POST` | `/api/auth/google/setup` | Public (Token) | Complete Google OAuth profile registration |
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/predict | Get price prediction |
-| POST | /api/suggest | Get investment suggestion |
-| GET | /api/data/:symbol | Get historical data |
-| POST | /api/orders | Place order |
-| GET | /api/orderbook/:symbol | Get order book |
-| GET | /api/users/:userId | Get user info |
+### Market Data Endpoints
 
-### ML Service (http://localhost:5000)
+| Method | Endpoint | Access | Description |
+|---|---|---|---|
+| `GET` | `/api/symbols` | Public | Paginated symbol master directory |
+| `GET` | `/api/search` | Public | Search symbols by ticker or company name |
+| `GET` | `/api/market` | Public | Market overview page with quotes |
+| `GET` | `/api/market/quote/:symbol` | Public | Real-time quote snapshot for symbol |
+| `GET` | `/api/market/quotes` | Public | Batch quote lookup for multiple symbols |
+| `GET` | `/api/market/candles/:symbol` | Public | OHLCV candlestick historical data |
+| `GET` | `/api/market/watchlist/:userId` | Authenticated | Fetch user's saved watchlist |
+| `PUT` | `/api/market/watchlist/:userId` | Authenticated | Update user's saved watchlist |
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/predict | Generate prediction |
-| POST | /api/suggest | Generate suggestion |
-| GET | /api/data/:symbol | Fetch stock data |
-| POST | /api/train | Train model |
+### Trading & Portfolio Endpoints
 
-## Configuration
+| Method | Endpoint | Access | Description |
+|---|---|---|---|
+| `POST` | `/api/orders` | Authenticated | Submit BUY / SELL Limit or Market order |
+| `POST` | `/api/orders/:orderId/cancel`| Authenticated | Cancel an open resting order |
+| `GET` | `/api/orders/:orderId` | Authenticated | Get order details by ID |
+| `GET` | `/api/orderbook/:symbol` | Public | Retrieve live order book depth |
+| `GET` | `/api/users/:userId/orders` | Authenticated | List all submitted orders for user |
+| `GET` | `/api/users/:userId/trades` | Authenticated | List all executed trades for user |
+| `GET` | `/api/positions/:userId` | Authenticated | Get current open positions |
+| `GET` | `/api/portfolio/:userId` | Authenticated | Get full portfolio value, cash, and P&L |
+| `GET` | `/trades` | Public | Global recent trades feed |
 
-Edit `.env` file to customize:
+### AI & Analytics Endpoints
 
-```
-BACKEND_PORT=3001
-ML_PORT=5000
-MATCHING_ENGINE_PORT=9000
-FRONTEND_PORT=3000
-MODEL_TYPE=lstm
-SEQUENCE_LENGTH=60
-```
+| Method | Endpoint | Access | Description |
+|---|---|---|---|
+| `POST` | `/predict` | Authenticated | Get price trend prediction (with mock fallback) |
+| `POST` | `/suggest` | Authenticated | Get BUY/SELL/HOLD suggestion based on trend |
+| `POST` | `/api/predict` | Authenticated | Forward prediction request to ML service |
+| `POST` | `/api/suggest` | Authenticated | Forward suggestion request to ML service |
 
-## Project Structure
+---
 
-```
-ai-trading/
-├── backend/           # Node.js API
-│   ├── server.js
-│   └── package.json
-├── frontend/          # React app
-│   ├── src/
-│   │   ├── App.js
-│   │   ├── App.css
-│   │   └── index.js
-│   └── package.json
-├── matching-engine/   # C++ order matching
-│   ├── include/
-│   ├── src/
-│   └── CMakeLists.txt
-├── ml-service/        # Python ML service
-│   ├── app.py
-│   ├── model_trainer.py
-│   ├── prediction_engine.py
-│   └── requirements.txt
-├── .env
-├── start.sh
-├── start.bat
-└── README.md
-```
+## Known System Characteristics & Limitations
 
-## How It Works
+1. **Market Orders on Empty Books**:
+   - The C++ matching engine executes orders strictly against resting counterparties. In the absence of resting counterparty limit orders, market orders will not find matching depth.
+2. **Upstream Market Data Rate Limits**:
+   - When upstream Yahoo Finance rate limits occur or tickers change, the backend gracefully falls back to deterministic technical models and cached quote snapshots.
+3. **Localhost vs Container Networking**:
+   - For containerized Docker deployments, service hostnames (`matching-engine`, `ml-service`) are used. For local development, set hostnames to `localhost`.
 
-### AI Prediction Flow
-
-1. User enters a stock symbol
-2. Backend fetches historical data from Yahoo Finance via ML service
-3. ML service trains LSTM/regression models on the data
-4. Model predicts next-day price and confidence score
-5. Suggestion engine generates BUY/SELL/HOLD recommendation
-
-### Order Matching Flow
-
-1. User submits order through frontend
-2. Backend validates order (balance, positions)
-3. Order sent to C++ matching engine via TCP socket
-4. Engine matches orders using price-time priority
-5. Partial or full fills are returned to user
-6. Order book updated and displayed in real-time
-
-### Matching Engine Algorithm
-
-- **Buy Orders**: Sorted by highest price first, then earliest time
-- **Sell Orders**: Sorted by lowest price first, then earliest time
-- **Matching**: Cross when buy price >= sell price
-- **Execution**: Price is set by resting order
-- **Partial Fills**: Supported with remaining quantity tracked
-
-## Technologies Used
-
-- **Frontend**: React, Recharts
-- **Backend**: Node.js, Express
-- **ML**: Python, Flask, TensorFlow, scikit-learn, yfinance
-- **Matching Engine**: C++17, custom TCP server
-
-## Development
-
-### Adding New Models
-
-Edit `ml-service/model_trainer.py` to add new model types:
-
-```python
-def _train_custom_model(self, data):
-    # Your model implementation
-    pass
-```
-
-### Extending Matching Engine
-
-Edit `matching-engine/src/order_book.cpp` to modify matching logic.
-
-### Frontend Components
-
-Add new panels in `frontend/src/App.js` and styles in `App.css`.
+---
 
 ## License
 
-MIT License - See LICENSE file for details.
-
-## Disclaimer
-
-This is a simulation platform for educational purposes only. It does not provide financial advice. Trading involves risk, and past performance does not guarantee future results.
+MIT License - For simulation and educational purposes only.
