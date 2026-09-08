@@ -65,22 +65,6 @@ A multi-service paper trading platform supporting Indian equities (NSE/BSE) and 
 
 ---
 
-## Verified Features
-
-| Feature Area | Implementation Status | Description |
-|---|---|---|
-| **User Registration** | Verified Working | Name, Age (13–120), Email validation, Password complexity, and starting capital (₹1,00,000 to ₹10,00,000 in ₹1,00,000 steps). |
-| **Authentication & Sessions** | Verified Working | Secure HTTP-only JWT cookie sessions (`ptx_session`), Bcrypt hashing (12 rounds), protected API middleware. |
-| **Multi-User Isolation** | Verified Working | Strict 403 Forbidden enforcement preventing users from inspecting or modifying other users' accounts, balances, orders, or positions. |
-| **Indian Stock Market Data** | Verified Working | Live quotes, OHLCV candlestick data, and search across 2,600+ NSE symbols via Yahoo Finance integration. |
-| **Watchlist Management** | Verified Working | Per-user custom watchlists with database persistence and real-time quote streaming. |
-| **Order Book & Limit Orders** | Verified Working | C++ engine resting orders, bid/ask depth visualization, and order cancellation with balance refund. |
-| **Trade Execution & P&L** | Verified Working | Price-time priority matching, position updates, cash balance settlement, and realized/unrealized P&L calculations. |
-| **Live WebSocket Streaming** | Verified Working | Client subscription to ticker streams via `ws://localhost:3001/ws/market`. |
-| **AI Suggestions & Fallback**| Verified Working | Recommendation engine with automatic deterministic mock fallback when live ML data feeds encounter upstream rate limits. |
-
----
-
 ## Prerequisites
 
 - **Node.js**: v18.0+ or v20.0+ (npm 9+)
@@ -251,17 +235,6 @@ chmod +x start.sh
 | `POST` | `/suggest` | Authenticated | Get BUY/SELL/HOLD suggestion based on trend |
 | `POST` | `/api/predict` | Authenticated | Forward prediction request to ML service |
 | `POST` | `/api/suggest` | Authenticated | Forward suggestion request to ML service |
-
----
-
-## Known System Characteristics & Limitations
-
-1. **Market Orders on Empty Books**:
-   - The C++ matching engine executes orders strictly against resting counterparties. In the absence of resting counterparty limit orders, market orders will not find matching depth.
-2. **Upstream Market Data Rate Limits**:
-   - When upstream Yahoo Finance rate limits occur or tickers change, the backend gracefully falls back to deterministic technical models and cached quote snapshots.
-3. **Localhost vs Container Networking**:
-   - For containerized Docker deployments, service hostnames (`matching-engine`, `ml-service`) are used. For local development, set hostnames to `localhost`.
 
 ---
 
