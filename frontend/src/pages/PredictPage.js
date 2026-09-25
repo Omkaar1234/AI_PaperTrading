@@ -10,6 +10,12 @@ function PredictPage({ trading }) {
         prediction={trading.prediction}
         selectedAsset={trading.selectedAsset}
         suggestion={trading.suggestion}
+        watchlist={trading.watchlist}
+        watchlistDetails={trading.watchlistDetails}
+        selectAsset={trading.selectAsset}
+        resolveAsset={trading.resolveAsset}
+        lookupSymbols={trading.lookupSymbols}
+        fetchSymbols={trading.fetchSymbols}
       />
     </div>
   );

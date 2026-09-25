@@ -2,3 +2,14 @@ venv/
 __pycache__/
 *.pyc
 .env
+.env.*
+*.log
+
+# Heavy research datasets and training caches (excluded from container build context)
+research_21d/phase_5b/data/
+research_21d/phase_5d/results/
+research_21d/phase_5e/phase_5e3/results/
+research_21d/phase_5e/telemetry/
+research_21d/phase_5f/results/
+research_21d/phase_5c/staging/
+scratch/

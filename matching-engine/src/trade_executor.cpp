@@ -104,23 +104,20 @@ TradeExecutor::ExecutionResult TradeExecutor::submit_order(const Order& order) {
         auto final_order = book->get_order(new_order.id);
         result.success = true;
 
-        // Calculate fill results
-        uint32_t remaining_qty = final_order ? final_order->remaining_qty : new_order.remaining_qty;
-        uint32_t total_filled = order.quantity - remaining_qty;
-        if (total_filled > 0) {
-            double total_value = 0.0;
-            for (const auto& trade : fills) {
-                total_value += trade.price * trade.quantity;
-                result.trade_ids.push_back(trade.trade_id);
-                result.trades.push_back(trade);
-                logger_.log_trade(trade);
-            }
-            result.avg_fill_price = total_value / total_filled;
-            result.filled_qty = total_filled;
-            result.remaining_qty = remaining_qty;
-        } else {
-            result.remaining_qty = remaining_qty;
+        // Calculate fill results strictly from executed fills
+        uint32_t total_filled = 0;
+        double total_value = 0.0;
+        for (const auto& trade : fills) {
+            total_filled += trade.quantity;
+            total_value += trade.price * trade.quantity;
+            result.trade_ids.push_back(trade.trade_id);
+            result.trades.push_back(trade);
+            logger_.log_trade(trade);
         }
+
+        result.filled_qty = total_filled;
+        result.remaining_qty = order.quantity > total_filled ? order.quantity - total_filled : 0;
+        result.avg_fill_price = total_filled > 0 ? (total_value / total_filled) : 0.0;
     } else {
         result.error_message = "Failed to add order to book";
     }

@@ -41,8 +41,15 @@ function normalizeWatchlistSymbols(symbols = []) {
 function buildPositionsFromOrders(orders = [], quoteMap = {}) {
   const posMap = {};
 
-  orders.forEach((order) => {
-    if (!(order.status === 'FILLED' || order.filled_qty > 0)) {
+  const sortedOrders = [...orders].sort((a, b) => {
+    const timeA = new Date(a.timestamp || a.createdAt || 0).getTime();
+    const timeB = new Date(b.timestamp || b.createdAt || 0).getTime();
+    return timeA - timeB;
+  });
+
+  sortedOrders.forEach((order) => {
+    const filledQty = Number(order.filled_qty || 0);
+    if (!filledQty) {
       return;
     }
 
@@ -54,31 +61,42 @@ function buildPositionsFromOrders(orders = [], quoteMap = {}) {
         invested: 0,
         marketPrice: quoteMap[order.symbol]?.price || order.avg_fill_price || order.price || 0,
         marketValue: 0,
-        unrealizedPnl: 0
+        unrealizedPnl: 0,
+        realizedPnl: 0
       };
     }
 
-    const qty = order.side === 'BUY' ? Number(order.filled_qty || 0) : -Number(order.filled_qty || 0);
-    posMap[order.symbol].quantity += qty;
-    posMap[order.symbol].invested += qty * Number(order.avg_fill_price || order.price || 0);
+    const fillPrice = Number(order.avg_fill_price || order.price || 0);
 
-    if (posMap[order.symbol].quantity > 0) {
-      posMap[order.symbol].avgPrice = posMap[order.symbol].invested / posMap[order.symbol].quantity;
-    } else {
-      posMap[order.symbol].avgPrice = 0;
+    if (order.side === 'BUY') {
+      posMap[order.symbol].quantity += filledQty;
+      posMap[order.symbol].invested += filledQty * fillPrice;
+      posMap[order.symbol].avgPrice = posMap[order.symbol].quantity > 0
+        ? posMap[order.symbol].invested / posMap[order.symbol].quantity
+        : 0;
+    } else if (order.side === 'SELL') {
+      const currentAvg = posMap[order.symbol].avgPrice || 0;
+      const costBasisDeducted = filledQty * currentAvg;
+      posMap[order.symbol].quantity = Math.max(0, posMap[order.symbol].quantity - filledQty);
+      posMap[order.symbol].invested = Math.max(0, posMap[order.symbol].invested - costBasisDeducted);
+      posMap[order.symbol].realizedPnl = (posMap[order.symbol].realizedPnl || 0) + (filledQty * (fillPrice - currentAvg));
+      if (posMap[order.symbol].quantity === 0) {
+        posMap[order.symbol].avgPrice = 0;
+        posMap[order.symbol].invested = 0;
+      }
     }
   });
 
   return Object.values(posMap)
-    .filter((position) => position.quantity !== 0)
+    .filter((position) => position.quantity > 0)
     .map((position) => {
-      const marketPrice = quoteMap[position.symbol]?.price || position.marketPrice || position.avgPrice;
-      const marketValue = position.quantity * marketPrice;
+      const livePrice = quoteMap[position.symbol]?.price || position.marketPrice || position.avgPrice;
+      const marketValue = position.quantity * livePrice;
       return {
         ...position,
-        marketPrice,
+        marketPrice: livePrice,
         marketValue,
-        unrealizedPnl: marketValue - position.quantity * position.avgPrice
+        unrealizedPnl: marketValue - position.invested
       };
     });
 }
@@ -112,6 +130,8 @@ export function useTradingData(authenticatedUser) {
   const [portfolio, setPortfolio] = useState(null);
   const [symbolDirectory, setSymbolDirectory] = useState({});
   const activeUserId = authenticatedUser?.id;
+  const [notifications, setNotifications] = useState([]);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
 
   const wsRef = useRef(null);
   const latestSelectionRef = useRef(null);
@@ -123,8 +143,13 @@ export function useTradingData(authenticatedUser) {
     if (selectedAsset?.symbol) {
       symbols.add(selectedAsset.symbol);
     }
+    positions.forEach((p) => {
+      if (p.symbol && p.quantity > 0) {
+        symbols.add(p.symbol);
+      }
+    });
     return Array.from(symbols);
-  }, [selectedAsset?.symbol, watchlist]);
+  }, [selectedAsset?.symbol, watchlist, positions]);
 
   const flashTradeMessage = (message) => {
     setTradeSuccess(message);
@@ -237,6 +262,28 @@ export function useTradingData(authenticatedUser) {
       return next;
     });
 
+    if (normalizedQuote.price) {
+      setPositions((currentPositions) => {
+        let changed = false;
+        const updated = currentPositions.map((pos) => {
+          if (pos.symbol === quote.symbol) {
+            changed = true;
+            const livePrice = normalizedQuote.price;
+            const marketValue = pos.quantity * livePrice;
+            const costBasis = pos.invested ?? (pos.quantity * (pos.avgPrice || pos.averagePrice || 0));
+            return {
+              ...pos,
+              marketPrice: livePrice,
+              marketValue,
+              unrealizedPnl: marketValue - costBasis
+            };
+          }
+          return pos;
+        });
+        return changed ? updated : currentPositions;
+      });
+    }
+
     if (selectedSymbolRef.current === quote.symbol) {
       const percent = normalizedQuote.previousClose
         ? (normalizedQuote.change / normalizedQuote.previousClose) * 100
@@ -335,15 +382,24 @@ export function useTradingData(authenticatedUser) {
       }
 
       if (Array.isArray(nextPortfolio?.positions) && nextPortfolio.positions.length > 0) {
-        setPositions(nextPortfolio.positions.map((position) => ({
-          symbol: position.symbol,
-          quantity: position.quantity,
-          avgPrice: position.averagePrice ?? position.avgPrice ?? 0,
-          invested: position.invested ?? position.quantity * (position.averagePrice ?? 0),
-          marketPrice: position.marketPrice ?? 0,
-          marketValue: position.marketValue ?? 0,
-          unrealizedPnl: position.unrealizedPnl ?? 0
-        })));
+        setPositions(nextPortfolio.positions.map((position) => {
+          const quantity = Number(position.quantity || 0);
+          const avgPrice = Number(position.averagePrice ?? position.avgPrice ?? 0);
+          const invested = Number(position.invested ?? (quantity * avgPrice));
+          const livePrice = Number(marketQuotes[position.symbol]?.price || position.marketPrice || avgPrice || 0);
+          const marketValue = quantity * livePrice;
+          return {
+            symbol: position.symbol,
+            assetType: position.assetType,
+            quantity,
+            avgPrice,
+            averagePrice: avgPrice,
+            invested,
+            marketPrice: livePrice,
+            marketValue,
+            unrealizedPnl: marketValue - invested
+          };
+        }));
       } else {
         setPositions(buildPositionsFromOrders(nextPortfolio?.orders || [], marketQuotes));
       }
@@ -369,17 +425,24 @@ export function useTradingData(authenticatedUser) {
       setOrders(nextOrders);
 
       const nextPositions = positionsResponse.data.positions?.length
-        ? positionsResponse.data.positions.map((position) => ({
-            symbol: position.symbol,
-            quantity: position.quantity,
-            avgPrice: position.averagePrice ?? position.avgPrice ?? 0,
-            invested: position.invested ?? position.quantity * (position.averagePrice ?? 0),
-            marketPrice: marketQuotes[position.symbol]?.price || position.marketPrice || 0,
-            marketValue:
-              position.marketValue ||
-              position.quantity * (marketQuotes[position.symbol]?.price || position.averagePrice || 0),
-            unrealizedPnl: position.unrealizedPnl || 0
-          }))
+        ? positionsResponse.data.positions.map((position) => {
+            const quantity = Number(position.quantity || 0);
+            const avgPrice = Number(position.averagePrice ?? position.avgPrice ?? 0);
+            const invested = Number(position.invested ?? (quantity * avgPrice));
+            const livePrice = Number(marketQuotes[position.symbol]?.price || position.marketPrice || avgPrice || 0);
+            const marketValue = quantity * livePrice;
+            return {
+              symbol: position.symbol,
+              assetType: position.assetType,
+              quantity,
+              avgPrice,
+              averagePrice: avgPrice,
+              invested,
+              marketPrice: livePrice,
+              marketValue,
+              unrealizedPnl: marketValue - invested
+            };
+          })
         : buildPositionsFromOrders(nextOrders, marketQuotes);
 
       setPositions(nextPositions);
@@ -387,6 +450,46 @@ export function useTradingData(authenticatedUser) {
       logApiFailure('fetch positions', error);
     }
   }, [activeUserId, marketQuotes]);
+
+  const fetchNotifications = useCallback(async () => {
+    if (!activeUserId) {
+      setNotifications([]);
+      setUnreadNotificationCount(0);
+      return;
+    }
+
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/notifications`);
+      const notifs = response.data.notifications || [];
+      setNotifications(notifs);
+      setUnreadNotificationCount(response.data.unreadCount ?? notifs.filter((n) => !n.read).length);
+    } catch (error) {
+      logApiFailure('fetch notifications', error);
+    }
+  }, [activeUserId]);
+
+  const markNotificationRead = useCallback(async (notificationId) => {
+    if (!notificationId) return;
+    try {
+      await axios.put(`${API_BASE_URL}/api/notifications/${notificationId}/read`);
+      setNotifications((prev) =>
+        prev.map((n) => (n.notificationId === notificationId ? { ...n, read: true } : n))
+      );
+      setUnreadNotificationCount((prev) => Math.max(0, prev - 1));
+    } catch (error) {
+      logApiFailure(`mark notification read ${notificationId}`, error);
+    }
+  }, []);
+
+  const markAllNotificationsRead = useCallback(async () => {
+    try {
+      await axios.post(`${API_BASE_URL}/api/notifications/mark-all-read`);
+      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+      setUnreadNotificationCount(0);
+    } catch (error) {
+      logApiFailure('mark all notifications read', error);
+    }
+  }, []);
 
   const fetchOrderBook = useCallback(async (symbol = selectedAsset?.symbol) => {
     if (!symbol) {
@@ -716,9 +819,14 @@ export function useTradingData(authenticatedUser) {
     return () => window.clearInterval(interval);
   }, [activeUserId, assetType, fetchAssetData, fetchOrderBook, fetchPortfolio, fetchPositions, fetchRecentTrades]);
 
-  const analyzeAsset = async () => {
-    if (!selectedAsset) {
+  const analyzeAsset = async (targetAsset = null) => {
+    const assetToAnalyze = targetAsset || selectedAsset;
+    if (!assetToAnalyze) {
       return;
+    }
+
+    if (targetAsset && targetAsset.symbol !== selectedAsset?.symbol) {
+      setSelectedAsset(targetAsset);
     }
 
     setAnalyzing(true);
@@ -726,20 +834,39 @@ export function useTradingData(authenticatedUser) {
     setSuggestion(null);
 
     try {
-      const predictResponse = await axios.post(`${API_BASE_URL}/predict`, {
-        symbol: selectedAsset.symbol
-      });
+      let predictResponse;
+      try {
+        predictResponse = await axios.post(`${API_BASE_URL}/api/predict`, {
+          symbol: assetToAnalyze.symbol
+        });
+      } catch (apiErr) {
+        // Fallback to /predict if /api/predict fails
+        predictResponse = await axios.post(`${API_BASE_URL}/predict`, {
+          symbol: assetToAnalyze.symbol
+        });
+      }
+
       const predictionData = predictResponse.data;
       setPrediction(predictionData);
 
-      const suggestResponse = await axios.post(`${API_BASE_URL}/suggest`, {
-        symbol: selectedAsset.symbol,
-        prediction: predictionData,
-        currentPosition: positions.find((position) => position.symbol === selectedAsset.symbol)?.quantity || 0
-      });
-      setSuggestion(suggestResponse.data);
+      if (predictionData && predictionData.status !== 'unavailable' && predictionData.supported !== false) {
+        const suggestResponse = await axios.post(`${API_BASE_URL}/suggest`, {
+          symbol: assetToAnalyze.symbol,
+          prediction: predictionData,
+          currentPosition: positions.find((position) => position.symbol === assetToAnalyze.symbol)?.quantity || 0
+        });
+        setSuggestion(suggestResponse.data);
+      } else {
+        setSuggestion(null);
+      }
     } catch (error) {
-      logApiFailure(`analyze ${selectedAsset.symbol}`, error);
+      logApiFailure(`analyze ${assetToAnalyze.symbol}`, error);
+      setPrediction({
+        symbol: assetToAnalyze.symbol,
+        status: 'error',
+        message: error?.response?.data?.error || error?.message || 'Unable to generate prediction'
+      });
+      setSuggestion(null);
     } finally {
       setAnalyzing(false);
     }
@@ -901,6 +1028,11 @@ export function useTradingData(authenticatedUser) {
     user,
     watchlist,
     watchlistDetails,
-    watchlistInput
+    watchlistInput,
+    notifications,
+    unreadNotificationCount,
+    fetchNotifications,
+    markNotificationRead,
+    markAllNotificationsRead
   };
 }

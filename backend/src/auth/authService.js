@@ -295,6 +295,7 @@ async function loginWithPassword({ email, password }) {
 function setSessionCookie(res, user) {
   const token = signSession(user);
   res.cookie(AUTH_COOKIE_NAME, token, sessionCookieOptions());
+  return token;
 }
 
 function clearSessionCookie(res) {

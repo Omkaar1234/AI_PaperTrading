@@ -6,6 +6,7 @@ const Position = require('../models/positionModel');
 const Watchlist = require('../models/watchlistModel');
 const MarketDataCache = require('../models/marketDataCacheModel');
 const Symbol = require('../models/symbolModel');
+const Notification = require('../models/notificationModel');
 
 function escapeRegex(value = '') {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -316,7 +317,11 @@ class PersistenceService {
       return [];
     }
 
-    return Position.find({ userId }).sort({ symbol: 1 }).lean();
+    const positions = await Position.find({ userId }).sort({ symbol: 1 }).lean();
+    return positions.map((p) => ({
+      ...p,
+      avgPrice: p.averagePrice ?? p.avgPrice ?? (p.quantity > 0 ? p.invested / p.quantity : 0)
+    }));
   }
 
   async saveWatchlist(userId, symbols) {
@@ -483,30 +488,52 @@ class PersistenceService {
       return null;
     }
 
-    const positionsValue = positions.reduce(
-      (sum, position) => sum + (position.marketValue || position.quantity * position.averagePrice),
+    const totalInvested = positions.reduce(
+      (sum, position) => sum + Number(position.invested || (position.quantity * (position.averagePrice || 0))),
       0
     );
+    const positionsValue = positions.reduce(
+      (sum, position) => sum + (position.marketValue || position.quantity * (position.marketPrice || position.averagePrice || 0)),
+      0
+    );
+    const openBuyOrders = orders.filter(
+      (o) => o.side === 'BUY' && ['OPEN', 'PARTIALLY_FILLED'].includes(o.status)
+    );
+    const reservedCash = openBuyOrders.reduce(
+      (sum, o) => sum + Number(o.price || 0) * Number(o.remaining_qty || 0),
+      0
+    );
+    const cashBalance = user.wallet?.cashBalance ?? user.currentBalance ?? 0;
+    const unrealizedPnl = positionsValue - totalInvested;
+    const realizedPnl = positions.reduce((sum, p) => sum + Number(p.realizedPnl || 0), 0);
+    const totalPnl = unrealizedPnl + realizedPnl;
 
     return {
       user: {
         id: user.userId,
         name: user.name,
         email: user.email,
-        balance: user.wallet?.cashBalance ?? 0,
-        currentBalance: user.currentBalance ?? user.wallet?.cashBalance ?? 0,
+        balance: cashBalance,
+        currentBalance: cashBalance,
         currency: user.wallet?.currency || 'INR'
       },
       summary: {
-        cashBalance: user.wallet?.cashBalance ?? 0,
-        investedValue: positionsValue,
-        totalPortfolioValue: (user.wallet?.cashBalance ?? 0) + positionsValue
+        cashBalance,
+        reservedCash,
+        availableCash: Math.max(0, cashBalance - reservedCash),
+        investedValue: totalInvested,
+        positionsValue,
+        totalPortfolioValue: cashBalance + positionsValue,
+        unrealizedPnl,
+        realizedPnl,
+        totalPnl
       },
       positions: positions.map((position) => ({
         symbol: position.symbol,
         assetType: position.assetType,
         quantity: position.quantity,
         averagePrice: position.averagePrice,
+        avgPrice: position.averagePrice ?? position.avgPrice ?? (position.quantity > 0 ? position.invested / position.quantity : 0),
         invested: position.invested,
         marketPrice: position.marketPrice,
         marketValue: position.marketValue,
@@ -601,6 +628,50 @@ class PersistenceService {
       trades: trades.length,
       positions: positions.length
     };
+  }
+
+  async createNotification(data) {
+    if (!this.isEnabled() || !Notification) {
+      return null;
+    }
+    const notificationId = data.notificationId || `notif_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    return Notification.create({
+      notificationId,
+      userId: data.userId,
+      title: data.title,
+      message: data.message,
+      type: data.type || 'INFO',
+      read: false,
+      metadata: data.metadata || {}
+    });
+  }
+
+  async getNotifications(userId, limit = 50) {
+    if (!this.isEnabled() || !Notification) {
+      return [];
+    }
+    return Notification.find({ userId }).sort({ createdAt: -1 }).limit(limit).lean();
+  }
+
+  async markNotificationRead(notificationId, userId) {
+    if (!this.isEnabled() || !Notification) {
+      return null;
+    }
+    return Notification.findOneAndUpdate(
+      { notificationId, userId },
+      { read: true },
+      { new: true }
+    );
+  }
+
+  async markAllNotificationsRead(userId) {
+    if (!this.isEnabled() || !Notification) {
+      return { modifiedCount: 0 };
+    }
+    return Notification.updateMany(
+      { userId, read: false },
+      { read: true }
+    );
   }
 }
 

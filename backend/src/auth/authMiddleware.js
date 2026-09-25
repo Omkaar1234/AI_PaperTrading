@@ -7,7 +7,9 @@ const {
 } = require('./authService');
 
 async function optionalAuth(req, res, next) {
-  const token = req.cookies?.[AUTH_COOKIE_NAME];
+  const authHeader = req.headers.authorization;
+  const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+  const token = req.cookies?.[AUTH_COOKIE_NAME] || bearerToken;
   if (!token) {
     return next();
   }

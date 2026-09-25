@@ -48,6 +48,8 @@ matching-engine/build/
 .vscode/
 .idea/
 .claude/
+.agents/
+.Documents/
 
 # =========================
 # OS Files
@@ -59,3 +61,27 @@ Thumbs.db
 # Runtime Files
 # =========================
 trades.log
+node_modules
+
+# =========================
+# Non-Production Documents & Media
+# =========================
+Documents/*.pptx
+Documents/WhatsApp Image*.jpeg
+
+# =========================
+# Heavy Research Datasets & Offline Caches (DO NOT TRACK)
+# =========================
+# Phase 5B historical 5-year Yahoo price cache (283 MB)
+ml-service/research_21d/phase_5b/data/
+
+# Historical prediction panels & resolved outcome datasets (>30 MB)
+ml-service/research_21d/phase_5d/results/predictions/
+ml-service/research_21d/phase_5d/results/resolved_outcomes/
+ml-service/research_21d/phase_5e/phase_5e3/results/*.jsonl
+ml-service/research_21d/phase_5e/phase_5e3/results/*.parquet
+ml-service/research_21d/phase_5e/telemetry/canary_telemetry.jsonl
+ml-service/research_21d/phase_5f/results/*.parquet
+
+# Research scratchpads
+ml-service/scratch/

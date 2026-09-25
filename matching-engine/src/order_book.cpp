@@ -120,7 +120,11 @@ void OrderBook::match_order(Order& order) {
         uint32_t trade_qty = std::min(order.remaining_qty, counter_order->remaining_qty);
         double trade_price = counter_order->price;
 
-        execute_trade(order, *counter_order, trade_qty, trade_price);
+        if (order.side == OrderSide::BUY) {
+            execute_trade(order, *counter_order, trade_qty, trade_price);
+        } else {
+            execute_trade(*counter_order, order, trade_qty, trade_price);
+        }
 
         // Put counter order back if not filled
         if (!counter_order->is_filled()) {

@@ -444,7 +444,13 @@ async function submitOrderToExecutionVenue({ symbol, side, type, orderPrice, qua
 function buildPositionsFromOrders(orders = []) {
     const positionMap = new Map();
 
-    orders.forEach((order) => {
+    const sortedOrders = [...orders].sort((a, b) => {
+        const timeA = new Date(a.timestamp || a.createdAt || 0).getTime();
+        const timeB = new Date(b.timestamp || b.createdAt || 0).getTime();
+        return timeA - timeB;
+    });
+
+    sortedOrders.forEach((order) => {
         const filledQty = Number(order.filled_qty || 0);
         if (!filledQty) {
             return;
@@ -455,22 +461,32 @@ function buildPositionsFromOrders(orders = []) {
             assetType: inferAssetType(order.symbol),
             quantity: 0,
             avgPrice: 0,
-            invested: 0
+            invested: 0,
+            realizedPnl: 0
         };
+
+        const fillPrice = Number(order.avg_fill_price || order.price || 0);
 
         if (order.side === 'BUY') {
             existing.quantity += filledQty;
-            existing.invested += filledQty * Number(order.avg_fill_price || order.price || 0);
+            existing.invested += filledQty * fillPrice;
+            existing.avgPrice = existing.quantity > 0 ? existing.invested / existing.quantity : 0;
         } else if (order.side === 'SELL') {
+            const costBasisDeducted = filledQty * (existing.avgPrice || 0);
             existing.quantity -= filledQty;
-            existing.invested -= filledQty * Number(order.avg_fill_price || order.price || 0);
+            existing.invested = Math.max(0, existing.invested - costBasisDeducted);
+            existing.realizedPnl = (existing.realizedPnl || 0) + (filledQty * (fillPrice - (existing.avgPrice || 0)));
+            if (existing.quantity <= 0) {
+                existing.quantity = 0;
+                existing.invested = 0;
+                existing.avgPrice = 0;
+            }
         }
 
-        existing.avgPrice = existing.quantity > 0 ? existing.invested / existing.quantity : 0;
         positionMap.set(order.symbol, existing);
     });
 
-    return Array.from(positionMap.values()).filter((position) => position.quantity !== 0);
+    return Array.from(positionMap.values()).filter((position) => position.quantity > 0);
 }
 
 function buildPositionsFromRuntimeUser(userId) {
@@ -558,7 +574,34 @@ async function reconcileCounterpartyTrade(trade, currentOrderSide, currentUserId
         return;
     }
 
-    const owner = findOrderOwner(counterpartyOrderId);
+    let owner = findOrderOwner(counterpartyOrderId);
+    if (!owner) {
+        const persistedOrder = await persistenceService.getOrderById(counterpartyOrderId);
+        if (persistedOrder) {
+            owner = {
+                userId: persistedOrder.userId,
+                order: {
+                    id: persistedOrder.orderId,
+                    symbol: persistedOrder.symbol,
+                    side: persistedOrder.side,
+                    type: persistedOrder.orderType,
+                    price: persistedOrder.price,
+                    quantity: persistedOrder.quantity,
+                    filled_qty: persistedOrder.filled_qty,
+                    remaining_qty: persistedOrder.remaining_qty,
+                    avg_fill_price: persistedOrder.avg_fill_price,
+                    user_id: persistedOrder.userId,
+                    status: persistedOrder.status,
+                    timestamp: persistedOrder.timestamp || persistedOrder.createdAt
+                }
+            };
+            if (!userOrders.has(owner.userId)) {
+                userOrders.set(owner.userId, []);
+            }
+            userOrders.get(owner.userId).push(owner.order);
+        }
+    }
+
     if (!owner) {
         return;
     }
@@ -577,6 +620,7 @@ async function reconcileCounterpartyTrade(trade, currentOrderSide, currentUserId
     } else {
         const currentPos = Number(counterpartyUser.positions.get(trade.symbol) || 0);
         counterpartyUser.positions.set(trade.symbol, currentPos + Number(trade.quantity || 0));
+        counterpartyUser.balance -= Number(trade.price || 0) * Number(trade.quantity || 0);
     }
 
     await persistenceService.saveOrder(owner.order, {
@@ -586,6 +630,14 @@ async function reconcileCounterpartyTrade(trade, currentOrderSide, currentUserId
         orderType: owner.order.type,
         engineOrderRef: owner.order.id,
         source: 'cpp_matching_engine'
+    });
+
+    await persistenceService.createNotification({
+        userId: owner.userId,
+        title: 'Order Executed',
+        message: `Your resting ${counterpartySide} order executed: ${trade.quantity} shares of ${trade.symbol} at ₹${Number(trade.price).toFixed(2)}`,
+        type: 'SUCCESS',
+        metadata: { tradeId: trade.id, orderId: owner.order.id, symbol: trade.symbol, side: counterpartySide }
     });
 
     await syncUserSnapshot(owner.userId);
@@ -634,9 +686,9 @@ app.post('/api/auth/register', async (req, res) => {
             positions: new Map()
         });
         userOrders.set(user.userId, []);
-        setSessionCookie(res, user);
+        const token = setSessionCookie(res, user);
 
-        res.status(201).json({ user: publicUser(user) });
+        res.status(201).json({ user: publicUser(user), token });
     } catch (error) {
         const statusCode = error.statusCode || (error.code === 11000 ? 409 : 500);
         res.status(statusCode).json({
@@ -658,8 +710,8 @@ app.post('/api/auth/login', async (req, res) => {
             currency: user.wallet?.currency || 'INR',
             positions: new Map()
         });
-        setSessionCookie(res, user);
-        res.json({ user: publicUser(user) });
+        const token = setSessionCookie(res, user);
+        res.json({ user: publicUser(user), token });
     } catch (error) {
         res.status(error.statusCode || 500).json({ error: error.message });
     }
@@ -777,8 +829,8 @@ app.post('/api/auth/google/setup', async (req, res) => {
 
 // ===================== NEW API ENDPOINTS =====================
 
-// POST /predict - Simple prediction endpoint
-app.post('/predict', requireAuth, async (req, res) => {
+// POST /predict and /api/predict - Prediction endpoint
+app.post(['/predict', '/api/predict'], requireAuth, async (req, res) => {
     try {
         const { symbol } = req.body;
 
@@ -788,10 +840,7 @@ app.post('/predict', requireAuth, async (req, res) => {
 
         const prediction = await predictionService.getPrediction(symbol);
 
-        res.json({
-            trend: prediction.trend,
-            confidence: prediction.confidence
-        });
+        res.json(prediction);
     } catch (error) {
         console.error('Prediction error:', error.message);
         res.status(500).json({ error: 'Failed to get prediction' });
@@ -897,6 +946,27 @@ app.post('/api/predict', requireAuth, async (req, res) => {
         console.error('Prediction error:', error.message);
         res.status(500).json({
             error: 'Failed to get prediction',
+            details: error.response?.data?.error || error.message
+        });
+    }
+});
+
+// Get ML V2.1 5-trading-day asset price movement prediction
+app.post('/api/v2/predict', requireAuth, async (req, res) => {
+    try {
+        const { symbol, assetType = 'stocks' } = req.body;
+
+        if (!symbol) {
+            return res.status(400).json({ error: 'Symbol is required' });
+        }
+
+        const prediction = await predictionService.getPredictionV2(symbol, { assetType });
+        res.json(prediction);
+    } catch (error) {
+        console.error('ML V2 prediction error:', error.message);
+        const statusCode = error.response?.status || 500;
+        res.status(statusCode).json({
+            error: 'Failed to get V2 prediction',
             details: error.response?.data?.error || error.message
         });
     }
@@ -1172,12 +1242,22 @@ app.post('/api/orders', requireAuth, async (req, res) => {
             return res.status(404).json({ error: 'User not found' });
         }
         if (side === 'BUY') {
+            const openBuyOrders = (userOrders.get(user_id) || []).filter(
+                (o) => o.side === 'BUY' && ['OPEN', 'PARTIALLY_FILLED'].includes(o.status)
+            );
+            const reservedCash = openBuyOrders.reduce(
+                (sum, o) => sum + Number(o.price || 0) * Number(o.remaining_qty || 0),
+                0
+            );
+            const availableCash = Math.max(0, user.balance - reservedCash);
             const requiredFunds = orderPrice * quantity;
-            if (user.balance < requiredFunds) {
+            if (availableCash < requiredFunds) {
                 return res.status(400).json({
-                    error: 'Insufficient funds',
+                    error: 'Insufficient funds: Available buying power exceeded by open orders',
                     required: requiredFunds,
-                    available: user.balance
+                    available: availableCash,
+                    cashBalance: user.balance,
+                    reservedCash
                 });
             }
         }
@@ -1201,9 +1281,65 @@ app.post('/api/orders', requireAuth, async (req, res) => {
             userId: user_id
         });
         const orderId = executionResult.orderId;
-        const filledQty = executionResult.filledQty;
-        const remainingQty = executionResult.remainingQty;
-        const avgFillPrice = executionResult.avgFillPrice;
+        const filledQty = Number(executionResult.filledQty || 0);
+        const remainingQty = Number(executionResult.remainingQty || 0);
+        const avgFillPrice = Number(executionResult.avgFillPrice || 0);
+
+        // EMPTY BOOK MARKET ORDER HANDLING:
+        if (type === 'MARKET' && filledQty === 0) {
+            const cancelledOrder = {
+                id: orderId,
+                symbol,
+                side,
+                type,
+                price: orderPrice,
+                quantity,
+                filled_qty: 0,
+                remaining_qty: 0,
+                avg_fill_price: 0,
+                user_id,
+                status: 'CANCELLED',
+                timestamp: new Date().toISOString()
+            };
+
+            if (!userOrders.has(user_id)) {
+                userOrders.set(user_id, []);
+            }
+            userOrders.get(user_id).push(cancelledOrder);
+
+            await persistenceService.saveOrder(cancelledOrder, {
+                userId: user_id,
+                symbol,
+                assetType,
+                orderType: type,
+                engineOrderRef: orderId,
+                submittedAt: new Date(),
+                source: executionResult.venue
+            });
+
+            await persistenceService.createNotification({
+                userId: user_id,
+                title: 'Order Cancelled',
+                message: `Market ${side} order for ${quantity} ${symbol} cancelled: No counterparty liquidity available in the order book.`,
+                type: 'WARNING',
+                metadata: { orderId, symbol, side, quantity }
+            });
+
+            await syncUserSnapshot(user_id);
+
+            return res.json({
+                success: false,
+                message: 'Market order cancelled: No counterparty liquidity available in the order book.',
+                order: cancelledOrder,
+                trades: [],
+                executionVenue: executionResult.venue,
+                user: {
+                    balance: user.balance,
+                    positions: Object.fromEntries(user.positions)
+                }
+            });
+        }
+
         const executionStatus = filledQty === quantity
             ? 'FILLED'
             : filledQty > 0
@@ -1221,10 +1357,7 @@ app.post('/api/orders', requireAuth, async (req, res) => {
                 const currentPos = user.positions.get(symbol) || 0;
                 user.positions.set(symbol, currentPos + filledQty);
             }
-
-            if (remainingQty > 0) {
-                user.balance -= orderPrice * remainingQty;
-            }
+            // Resting limit order remainder does NOT prematurely deduct cash
         } else if (filledQty > 0) {
             const currentPos = user.positions.get(symbol) || 0;
             user.positions.set(symbol, currentPos - filledQty);
@@ -1235,21 +1368,20 @@ app.post('/api/orders', requireAuth, async (req, res) => {
             user.balance += proceeds;
         }
 
-        const order =
-            {
-                id: orderId,
-                symbol,
-                side,
-                type,
-                price: orderPrice,
-                quantity,
-                filled_qty: filledQty,
-                remaining_qty: remainingQty,
-                avg_fill_price: avgFillPrice,
-                user_id,
-                status: executionStatus,
-                timestamp: new Date().toISOString()
-            };
+        const order = {
+            id: orderId,
+            symbol,
+            side,
+            type,
+            price: orderPrice,
+            quantity,
+            filled_qty: filledQty,
+            remaining_qty: remainingQty,
+            avg_fill_price: avgFillPrice,
+            user_id,
+            status: executionStatus,
+            timestamp: new Date().toISOString()
+        };
 
         if (!userOrders.has(user_id)) {
             userOrders.set(user_id, []);
@@ -1277,6 +1409,24 @@ app.post('/api/orders', requireAuth, async (req, res) => {
                 });
                 await reconcileCounterpartyTrade(executedTrade, side, user_id);
             }
+        }
+
+        if (filledQty > 0) {
+            await persistenceService.createNotification({
+                userId: user_id,
+                title: executionStatus === 'FILLED' ? 'Order Executed' : 'Order Partially Executed',
+                message: `${side} ${filledQty}/${quantity} ${symbol} @ ₹${avgFillPrice.toFixed(2)}`,
+                type: 'SUCCESS',
+                metadata: { orderId, symbol, side, filledQty, avgFillPrice }
+            });
+        } else if (executionStatus === 'OPEN') {
+            await persistenceService.createNotification({
+                userId: user_id,
+                title: 'Order Placed',
+                message: `Resting LIMIT ${side} order placed for ${quantity} ${symbol} @ ₹${orderPrice.toFixed(2)}`,
+                type: 'INFO',
+                metadata: { orderId, symbol, side, quantity, price: orderPrice }
+            });
         }
 
         await syncUserSnapshot(user_id);
@@ -1347,11 +1497,6 @@ app.post('/api/orders/:orderId/cancel', requireAuth, async (req, res) => {
         const parsed = parseEngineResponse(response);
 
         if (parsed.kind === 'SUCCESS') {
-            const user = users.get(foundUserId);
-            if (targetOrder.side === 'BUY' && Number(targetOrder.remaining_qty || 0) > 0 && user) {
-                user.balance += Number(targetOrder.price || 0) * Number(targetOrder.remaining_qty || 0);
-            }
-
             targetOrder.status = 'CANCELLED';
             targetOrder.remaining_qty = 0;
 
@@ -1364,6 +1509,13 @@ app.post('/api/orders/:orderId/cancel', requireAuth, async (req, res) => {
             });
 
             if (foundUserId) {
+                await persistenceService.createNotification({
+                    userId: foundUserId,
+                    title: 'Order Cancelled',
+                    message: `Order ${orderId} for ${symbol} was cancelled.`,
+                    type: 'INFO',
+                    metadata: { orderId, symbol }
+                });
                 await syncUserSnapshot(foundUserId);
             }
         } else {
@@ -1565,26 +1717,52 @@ app.get('/api/orders/:orderId', requireAuth, async (req, res) => {
 });
 
 // Persisted portfolio snapshot
-app.get('/api/portfolio/:userId', requireAuth, async (req, res) => {
+app.get(['/api/portfolio', '/api/portfolio/:userId'], requireAuth, async (req, res) => {
     try {
-        if (req.params.userId !== req.user.id) {
+        const targetUserId = req.params.userId || req.user.id;
+        if (targetUserId !== req.user.id) {
             return res.status(403).json({ error: 'Forbidden resource' });
         }
-        const portfolio = await persistenceService.getPortfolio(req.params.userId);
+        const portfolio = await persistenceService.getPortfolio(targetUserId);
 
         if (!portfolio) {
-            const user = users.get(req.params.userId);
+            const user = users.get(targetUserId);
+            const userBalance = user?.balance || 0;
+            const openBuyOrders = (userOrders.get(targetUserId) || []).filter(
+                (o) => o.side === 'BUY' && ['OPEN', 'PARTIALLY_FILLED'].includes(o.status)
+            );
+            const reservedCash = openBuyOrders.reduce(
+                (sum, o) => sum + Number(o.price || 0) * Number(o.remaining_qty || 0),
+                0
+            );
+            const positions = buildPositionsFromOrders(userOrders.get(targetUserId) || []);
+            const totalInvested = positions.reduce((sum, p) => sum + Number(p.invested || 0), 0);
+            const positionsValue = positions.reduce(
+                (sum, p) => sum + Number(p.marketValue || (p.quantity * (p.marketPrice || p.avgPrice || 0))),
+                0
+            );
+
+            const unrealizedPnl = positionsValue - totalInvested;
+            const realizedPnl = positions.reduce((sum, p) => sum + Number(p.realizedPnl || 0), 0);
+            const totalPnl = unrealizedPnl + realizedPnl;
+
             return res.json({
-                user: user ? { id: user.id, balance: user.balance, currency: 'USD' } : null,
+                user: user ? { id: user.id, balance: userBalance, currency: 'INR' } : null,
                 summary: {
-                    cashBalance: user?.balance || 0,
-                    investedValue: 0,
-                    totalPortfolioValue: user?.balance || 0
+                    cashBalance: userBalance,
+                    reservedCash,
+                    availableCash: Math.max(0, userBalance - reservedCash),
+                    investedValue: totalInvested,
+                    positionsValue,
+                    totalPortfolioValue: userBalance + positionsValue,
+                    unrealizedPnl,
+                    realizedPnl,
+                    totalPnl
                 },
-                positions: buildPositionsFromOrders(userOrders.get(req.params.userId) || []),
-                orders: userOrders.get(req.params.userId) || [],
+                positions,
+                orders: userOrders.get(targetUserId) || [],
                 trades: Array.from(trades.values()).filter(
-                    (trade) => trade.buyer_id === req.params.userId || trade.seller_id === req.params.userId
+                    (trade) => trade.buyer_id === targetUserId || trade.seller_id === targetUserId
                 )
             });
         }
@@ -1592,7 +1770,7 @@ app.get('/api/portfolio/:userId', requireAuth, async (req, res) => {
         res.json({
             ...portfolio,
             trades: Array.isArray(portfolio.trades)
-                ? portfolio.trades.map((trade) => projectTradeForUser(trade, req.params.userId))
+                ? portfolio.trades.map((trade) => projectTradeForUser(trade, targetUserId))
                 : []
         });
     } catch (error) {
@@ -1601,15 +1779,16 @@ app.get('/api/portfolio/:userId', requireAuth, async (req, res) => {
 });
 
 // Get positions
-app.get('/api/positions/:userId', requireAuth, async (req, res) => {
+app.get(['/api/positions', '/api/positions/:userId'], requireAuth, async (req, res) => {
     try {
-        if (req.params.userId !== req.user.id) {
+        const targetUserId = req.params.userId || req.user.id;
+        if (targetUserId !== req.user.id) {
             return res.status(403).json({ error: 'Forbidden resource' });
         }
-        const positions = await persistenceService.getPositions(req.params.userId);
+        const positions = await persistenceService.getPositions(targetUserId);
         if (positions.length === 0) {
             return res.json({
-                positions: buildPositionsFromOrders(userOrders.get(req.params.userId) || [])
+                positions: buildPositionsFromOrders(userOrders.get(targetUserId) || [])
             });
         }
 
@@ -1620,17 +1799,18 @@ app.get('/api/positions/:userId', requireAuth, async (req, res) => {
 });
 
 // Watchlist APIs
-app.get('/api/market/watchlist/:userId', requireAuth, async (req, res) => {
+app.get(['/api/market/watchlist', '/api/market/watchlist/:userId'], requireAuth, async (req, res) => {
     try {
-        if (req.params.userId !== req.user.id) {
+        const targetUserId = req.params.userId || req.user.id;
+        if (targetUserId !== req.user.id) {
             return res.status(403).json({ error: 'Forbidden resource' });
         }
-        const watchlist = await persistenceService.getWatchlist(req.params.userId);
+        const watchlist = await persistenceService.getWatchlist(targetUserId);
         const symbols = watchlist?.symbols || DEFAULT_WATCHLIST;
         const quotes = await marketDataService.getQuotes(symbols.map((entry) => entry.symbol));
 
         res.json({
-            userId: req.params.userId,
+            userId: targetUserId,
             symbols,
             quotes
         });
@@ -1639,9 +1819,10 @@ app.get('/api/market/watchlist/:userId', requireAuth, async (req, res) => {
     }
 });
 
-app.put('/api/market/watchlist/:userId', requireAuth, async (req, res) => {
+app.put(['/api/market/watchlist', '/api/market/watchlist/:userId'], requireAuth, async (req, res) => {
     try {
-        if (req.params.userId !== req.user.id) {
+        const targetUserId = req.params.userId || req.user.id;
+        if (targetUserId !== req.user.id) {
             return res.status(403).json({ error: 'Forbidden resource' });
         }
         const symbols = Array.isArray(req.body.symbols) ? req.body.symbols : [];
@@ -1650,13 +1831,42 @@ app.put('/api/market/watchlist/:userId', requireAuth, async (req, res) => {
             assetType: entry.assetType || inferAssetType(entry.symbol)
         }));
 
-        await persistenceService.saveWatchlist(req.params.userId, normalizedSymbols);
+        await persistenceService.saveWatchlist(targetUserId, normalizedSymbols);
 
         res.json({
             success: true,
-            userId: req.params.userId,
+            userId: targetUserId,
             symbols: normalizedSymbols
         });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Notification APIs
+app.get('/api/notifications', requireAuth, async (req, res) => {
+    try {
+        const notifications = await persistenceService.getNotifications(req.user.id);
+        const unreadCount = notifications.filter((n) => !n.read).length;
+        res.json({ notifications, unreadCount });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.put('/api/notifications/:id/read', requireAuth, async (req, res) => {
+    try {
+        const updated = await persistenceService.markNotificationRead(req.params.id, req.user.id);
+        res.json({ success: true, notification: updated });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/notifications/mark-all-read', requireAuth, async (req, res) => {
+    try {
+        await persistenceService.markAllNotificationsRead(req.user.id);
+        res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -1719,6 +1929,7 @@ app.post('/api/trades/ingest', requireAuth, async (req, res) => {
                     users.set(payload.userId, persistedUser);
                 }
             }
+            await syncUserSnapshot(payload.userId);
         }
 
         res.json({ success: true, trade });

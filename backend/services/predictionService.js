@@ -21,83 +21,59 @@ async function getPrediction(symbol, options = {}) {
     // Try to call ML service first
     if (useMLService) {
         try {
-            // Call the simple /predict endpoint
+            // Call the ML service /predict endpoint
             const response = await axios.post(`${ML_SERVICE_URL}/predict`, {
                 symbol
             }, {
-                timeout: 5000 // 5 second timeout
+                timeout: 10000 // 10 second timeout for 21D ML inference
             });
 
-            // Return the simple response directly: { trend, confidence }
+            if (response.data.status === 'unavailable') {
+                return {
+                    symbol,
+                    status: 'unavailable',
+                    supported: false,
+                    message: response.data.message || 'Prediction is not currently supported for this asset.',
+                    trend: 'NEUTRAL',
+                    signal: 'NEUTRAL',
+                    confidence: 0
+                };
+            }
+
+            // Return full response preserving backward compatibility
             return {
-                trend: response.data.trend,
-                confidence: response.data.confidence
+                ...response.data,
+                trend: response.data.trend || response.data.signal || 'HOLD',
+                signal: response.data.signal || response.data.trend || 'NEUTRAL',
+                confidence: typeof response.data.confidence === 'number' ? response.data.confidence : 50,
+                supported: response.data.supported !== false
             };
         } catch (error) {
-            console.warn('ML service unavailable, using mock prediction:', error.message);
-            // Fall through to mock prediction
+            console.warn('ML service error for symbol:', symbol, error.message);
+            return {
+                symbol,
+                status: 'unavailable',
+                supported: false,
+                message: 'The current prediction model does not support this asset yet.',
+                trend: 'NEUTRAL',
+                signal: 'NEUTRAL',
+                confidence: 0
+            };
         }
     }
 
-    // Fallback: Return mock prediction
-    return generateMockPrediction(symbol);
-}
-
-/**
- * Transform ML service response to our format
- * @param {Object} mlData - Response from ML service
- * @returns {Object} - { trend: 'UP'|'DOWN', confidence: number }
- */
-function transformMLResponse(mlData) {
-    // If the ML service returns predictions array, determine trend from last values
-    if (mlData.predictions && Array.isArray(mlData.predictions)) {
-        const predictions = mlData.predictions;
-        const midPoint = Math.floor(predictions.length / 2);
-        const firstHalf = predictions.slice(0, midPoint);
-        const secondHalf = predictions.slice(midPoint);
-
-        const firstAvg = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
-        const secondAvg = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
-
-        const trend = secondAvg > firstAvg ? 'UP' : 'DOWN';
-        const confidence = Math.min(Math.abs((secondAvg - firstAvg) / firstAvg * 100), 99);
-
-        return {
-            trend,
-            confidence: Math.round(confidence * 100) / 100
-        };
-    }
-
-    // Fallback
     return {
-        trend: Math.random() > 0.5 ? 'UP' : 'DOWN',
-        confidence: Math.round((50 + Math.random() * 40) * 100) / 100
+        symbol,
+        status: 'unavailable',
+        supported: false,
+        message: 'The current prediction model does not support this asset yet.',
+        trend: 'NEUTRAL',
+        signal: 'NEUTRAL',
+        confidence: 0
     };
 }
 
-/**
- * Generate a mock prediction for demo purposes
- * Uses symbol hash to make it deterministic per symbol
- * @param {string} symbol - Stock symbol
- * @returns {Object} - { trend: 'UP'|'DOWN', confidence: number }
- */
-function generateMockPrediction(symbol) {
-    // Use symbol to create deterministic randomness
-    const hash = symbol.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    const random = Math.sin(hash) * 10000;
-    const normalized = random - Math.floor(random);
 
-    // Bias toward UP slightly (55/45)
-    const trend = normalized > 0.45 ? 'UP' : 'DOWN';
-
-    // Confidence between 55% and 95%
-    const confidence = 55 + (normalized * 40);
-
-    return {
-        trend,
-        confidence: Math.round(confidence * 100) / 100
-    };
-}
 
 /**
  * Get trading suggestion based on prediction
@@ -142,7 +118,25 @@ async function getSuggestion(symbol, prediction = null, currentPosition = 0) {
     };
 }
 
+/**
+ * Get ML V2.1 5-trading-day movement prediction
+ * @param {string} symbol - Stock or crypto symbol
+ * @param {Object} options - { assetType }
+ * @returns {Object} - V2 prediction response
+ */
+async function getPredictionV2(symbol, options = {}) {
+    const { assetType = 'stocks' } = options;
+    const response = await axios.post(`${ML_SERVICE_URL}/api/v2/predict`, {
+        symbol,
+        assetType
+    }, {
+        timeout: 10000
+    });
+    return response.data;
+}
+
 module.exports = {
     getPrediction,
-    getSuggestion
+    getSuggestion,
+    getPredictionV2
 };

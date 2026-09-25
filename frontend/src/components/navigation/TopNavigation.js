@@ -2,17 +2,30 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { formatINR } from '../../constants';
 import { Badge, SearchBar, Tooltip } from '../ui';
+import NotificationDropdown from './NotificationDropdown';
 
 function TopNavigation({ meta, trading, auth }) {
   const navigate = useNavigate();
   const [now, setNow] = useState(() => new Date());
   const [query, setQuery] = useState('');
   const [statusText, setStatusText] = useState('');
+  const [showNotifications, setShowNotifications] = useState(false);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!showNotifications) return;
+    const handleClickOutside = (e) => {
+      if (!e.target.closest('.notification-bell-container')) {
+        setShowNotifications(false);
+      }
+    };
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [showNotifications]);
 
   const formattedDateTime = useMemo(
     () =>
@@ -60,6 +73,8 @@ function TopNavigation({ meta, trading, auth }) {
     navigate('/login', { replace: true });
   };
 
+  const unreadCount = trading.unreadNotificationCount ?? trading.notifications?.filter((n) => !n.read).length ?? 0;
+
   return (
     <header className="top-navigation">
       <div className="top-navigation-title">
@@ -88,12 +103,29 @@ function TopNavigation({ meta, trading, auth }) {
           {formattedDateTime}
         </div>
 
-        <Tooltip label="Notifications">
-          <button type="button" className="icon-button" aria-label="Notifications">
-            <span aria-hidden="true">NT</span>
-            {trading.orders?.length ? <em>{Math.min(trading.orders.length, 9)}</em> : null}
-          </button>
-        </Tooltip>
+        <div className="notification-bell-container" style={{ position: 'relative' }}>
+          <Tooltip label="Notifications">
+            <button
+              type="button"
+              className={`icon-button ${showNotifications ? 'active' : ''}`}
+              aria-label="Notifications"
+              onClick={() => setShowNotifications((prev) => !prev)}
+            >
+              <span aria-hidden="true">&#128276;</span>
+              {unreadCount > 0 ? <em>{Math.min(unreadCount, 9)}</em> : null}
+            </button>
+          </Tooltip>
+
+          {showNotifications && (
+            <NotificationDropdown
+              notifications={trading.notifications || []}
+              unreadCount={unreadCount}
+              onClose={() => setShowNotifications(false)}
+              onMarkRead={(id) => trading.markNotificationRead?.(id)}
+              onMarkAllRead={() => trading.markAllNotificationsRead?.()}
+            />
+          )}
+        </div>
 
         <button type="button" className="profile-chip" aria-label="User profile">
           <span aria-hidden="true">U</span>
