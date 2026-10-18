@@ -249,6 +249,7 @@ export function getAchievementBadges(trading, riskMetrics, completedLessons = []
       criteria: 'Max single position <= 25% of portfolio',
       unlocked: positions.length > 0 && riskMetrics.maxConcentration <= 25,
       progress: positions.length === 0 ? 'No open positions' : `${riskMetrics.maxConcentration.toFixed(1)}% (Threshold: ≤ 25%)`,
+      progressPct: positions.length === 0 ? 0 : riskMetrics.maxConcentration <= 25 ? 100 : Math.max(10, Math.round((25 / Math.max(1, riskMetrics.maxConcentration)) * 100)),
       unlockedNotice: 'Safeguarded against catastrophic single-stock risk.'
     },
     {
@@ -260,6 +261,7 @@ export function getAchievementBadges(trading, riskMetrics, completedLessons = []
       criteria: 'At least 1 limit order submitted',
       unlocked: orders.some((o) => String(o.type).toUpperCase() === 'LIMIT'),
       progress: `${riskMetrics.limitOrders} limit orders placed`,
+      progressPct: riskMetrics.limitOrders > 0 ? 100 : 0,
       unlockedNotice: 'Prioritizing execution price certainty over impulsive market chasing.'
     },
     {
@@ -271,6 +273,7 @@ export function getAchievementBadges(trading, riskMetrics, completedLessons = []
       criteria: 'Positions held across ≥ 2 sectors',
       unlocked: riskMetrics.sectorsCount >= 2,
       progress: `${riskMetrics.sectorsCount} of 2 required sectors represented`,
+      progressPct: Math.min(100, Math.round((riskMetrics.sectorsCount / 2) * 100)),
       unlockedNotice: 'Portfolio insulated against idiosyncratic sector shocks.'
     },
     {
@@ -282,6 +285,7 @@ export function getAchievementBadges(trading, riskMetrics, completedLessons = []
       criteria: 'Liquid cash reserve ≥ 15%',
       unlocked: riskMetrics.cashReserveRatio >= 15,
       progress: `${riskMetrics.cashReserveRatio.toFixed(1)}% cash reserve (Target: ≥ 15%)`,
+      progressPct: Math.min(100, Math.round((riskMetrics.cashReserveRatio / 15) * 100)),
       unlockedNotice: 'Dry powder preserved for opportunistic value entries.'
     },
     {
@@ -293,6 +297,7 @@ export function getAchievementBadges(trading, riskMetrics, completedLessons = []
       criteria: 'Analyze an asset with the 21D ML model',
       unlocked: hasPrediction,
       progress: hasPrediction ? 'Evaluated' : 'Awaiting first forecast review',
+      progressPct: hasPrediction ? 100 : 0,
       unlockedNotice: 'Grounded decision in mathematical dispersion, not intuition.'
     },
     {
@@ -304,6 +309,7 @@ export function getAchievementBadges(trading, riskMetrics, completedLessons = []
       criteria: 'Watchlist contains ≥ 3 symbols',
       unlocked: watchlist.length >= 3,
       progress: `${watchlist.length} of 3 symbols configured`,
+      progressPct: Math.min(100, Math.round((watchlist.length / 3) * 100)),
       unlockedNotice: 'Monitoring targeted setups rather than wandering the market.'
     },
     {
@@ -315,6 +321,7 @@ export function getAchievementBadges(trading, riskMetrics, completedLessons = []
       criteria: 'Complete 6 educational lessons',
       unlocked: completedLessons.length >= CORE_LESSONS.length,
       progress: `${completedLessons.length} of ${CORE_LESSONS.length} modules completed`,
+      progressPct: Math.min(100, Math.round((completedLessons.length / CORE_LESSONS.length) * 100)),
       unlockedNotice: 'Firm theoretical foundation in capital preservation established.'
     },
     {
@@ -326,6 +333,7 @@ export function getAchievementBadges(trading, riskMetrics, completedLessons = []
       criteria: 'Record ≥ 1 reflective journal entry',
       unlocked: journalEntries.length >= 1,
       progress: `${journalEntries.length} reflection entries recorded`,
+      progressPct: Math.min(100, Math.round((journalEntries.length / 1) * 100)),
       unlockedNotice: 'Documenting pre-trade hypotheses to eliminate emotional hindsight bias.'
     }
   ];

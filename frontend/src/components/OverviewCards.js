@@ -1,8 +1,7 @@
 import React from 'react';
 import { formatINR } from '../constants';
-
-function OverviewCards({ orders, positions, totalPortfolioValue, user }) {
-  const invested = positions.reduce((sum, position) => sum + position.invested, 0);
+function OverviewCards({ orders = [], positions = [], totalPortfolioValue = 0, user }) {
+  const invested = (positions || []).reduce((sum, position) => sum + (Number(position.invested) || 0), 0);
 
   const cards = [
     { label: 'Portfolio Value', value: formatINR(totalPortfolioValue) },

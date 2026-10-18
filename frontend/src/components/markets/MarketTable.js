@@ -4,20 +4,20 @@ import { formatINR } from '../../constants';
 import { formatMarketCap } from './marketUtils';
 
 const COLUMNS = [
-  { label: 'Company', width: 260, min: 220 },
-  { label: 'NSE Symbol', width: 126, min: 110 },
-  { label: 'Price', width: 124, min: 110 },
-  { label: 'Change', width: 116, min: 100 },
-  { label: '%', width: 88, min: 78 },
-  { label: 'Open', width: 112, min: 96 },
-  { label: 'High', width: 112, min: 96 },
-  { label: 'Low', width: 112, min: 96 },
-  { label: 'Prev Close', width: 122, min: 108 },
-  { label: 'Volume', width: 128, min: 112 },
-  { label: 'Market Cap', width: 132, min: 116 },
-  { label: '52W High', width: 122, min: 108 },
-  { label: '52W Low', width: 122, min: 108 },
-  { label: 'Actions', width: 236, min: 220 }
+  { label: 'Company', width: 210, min: 170 },
+  { label: 'NSE Symbol', width: 105, min: 90 },
+  { label: 'Price', width: 100, min: 85 },
+  { label: 'Change', width: 95, min: 80 },
+  { label: '%', width: 75, min: 65 },
+  { label: 'Open', width: 90, min: 75 },
+  { label: 'High', width: 90, min: 75 },
+  { label: 'Low', width: 90, min: 75 },
+  { label: 'Prev Close', width: 95, min: 80 },
+  { label: 'Volume', width: 105, min: 85 },
+  { label: 'Market Cap', width: 110, min: 90 },
+  { label: '52W High', width: 95, min: 80 },
+  { label: '52W Low', width: 95, min: 80 },
+  { label: 'Actions', width: 170, min: 150 }
 ];
 
 function MarketTable({ rows, loading, watchedSymbols, onSort, sortKey, onSelectStock, onWatch, trading }) {

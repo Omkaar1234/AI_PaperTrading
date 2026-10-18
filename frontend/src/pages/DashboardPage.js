@@ -77,7 +77,12 @@ function DashboardPage({ trading }) {
       {/* ROW 3: Market Overview + Portfolio Mix */}
       <div className="dashboard-grid-row two-col-balanced">
         <MarketOverview />
-        <PortfolioAllocation positions={trading.positions} marketQuotes={trading.marketQuotes} />
+        <PortfolioAllocation
+          positions={trading.positions}
+          marketQuotes={trading.marketQuotes}
+          cashBalance={trading.user?.balance || 0}
+          totalPortfolioValue={portfolioValue}
+        />
       </div>
 
       {/* ROW 4: Watchlist + Recent Execution Activity */}

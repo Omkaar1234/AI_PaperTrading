@@ -317,11 +317,50 @@ class PersistenceService {
       return [];
     }
 
-    const positions = await Position.find({ userId }).sort({ symbol: 1 }).lean();
-    return positions.map((p) => ({
-      ...p,
-      avgPrice: p.averagePrice ?? p.avgPrice ?? (p.quantity > 0 ? p.invested / p.quantity : 0)
-    }));
+    const [positions, trades] = await Promise.all([
+      Position.find({ userId }).sort({ symbol: 1 }).lean(),
+      Trade.find({ $or: [{ userId }, { buyer_id: userId }] }).sort({ executedAt: -1 }).lean()
+    ]);
+
+    return positions.map((p) => {
+      let avgPrice = Number(p.averagePrice ?? p.avgPrice ?? (p.quantity > 0 && p.invested > 0 ? p.invested / p.quantity : 0));
+      let invested = Number(p.invested || 0);
+      const quantity = Number(p.quantity || 0);
+
+      if ((!avgPrice || avgPrice <= 0) && quantity > 0 && trades.length > 0) {
+        const symbolTrades = trades.filter(
+          (t) => t.symbol === p.symbol && (t.buyer_id === userId || (t.userId === userId && t.side === 'BUY'))
+        );
+        if (symbolTrades.length > 0) {
+          const totalBuyCost = symbolTrades.reduce((sum, t) => sum + Number(t.price || 0) * Number(t.quantity || 0), 0);
+          const totalBuyQty = symbolTrades.reduce((sum, t) => sum + Number(t.quantity || 0), 0);
+          if (totalBuyQty > 0) {
+            avgPrice = totalBuyCost / totalBuyQty;
+            invested = quantity * avgPrice;
+          }
+        }
+      }
+
+      if (invested <= 0 && avgPrice > 0 && quantity > 0) {
+        invested = quantity * avgPrice;
+      }
+
+      const hasCostBasis = avgPrice > 0 && invested > 0;
+      const marketPrice = Number(p.marketPrice || avgPrice || 0);
+      const marketValue = Number(p.marketValue ?? (quantity * marketPrice));
+      const unrealizedPnl = hasCostBasis ? (marketValue - invested) : 0;
+
+      return {
+        ...p,
+        averagePrice: avgPrice,
+        avgPrice,
+        invested,
+        marketPrice,
+        marketValue,
+        unrealizedPnl,
+        costBasisKnown: hasCostBasis
+      };
+    });
   }
 
   async saveWatchlist(userId, symbols) {
@@ -488,12 +527,57 @@ class PersistenceService {
       return null;
     }
 
-    const totalInvested = positions.reduce(
-      (sum, position) => sum + Number(position.invested || (position.quantity * (position.averagePrice || 0))),
+    // Reconcile any positions with missing cost basis against user's executed buy trades
+    const reconciledPositions = positions.map((position) => {
+      const quantity = Number(position.quantity || 0);
+      let avgPrice = Number(position.averagePrice ?? position.avgPrice ?? 0);
+      let invested = Number(position.invested || 0);
+
+      if ((!avgPrice || avgPrice <= 0) && quantity > 0) {
+        const symbolTrades = trades.filter(
+          (t) => t.symbol === position.symbol && (t.buyer_id === userId || (t.userId === userId && t.side === 'BUY'))
+        );
+        if (symbolTrades.length > 0) {
+          const totalBuyCost = symbolTrades.reduce((sum, t) => sum + Number(t.price || 0) * Number(t.quantity || 0), 0);
+          const totalBuyQty = symbolTrades.reduce((sum, t) => sum + Number(t.quantity || 0), 0);
+          if (totalBuyQty > 0) {
+            avgPrice = totalBuyCost / totalBuyQty;
+            invested = quantity * avgPrice;
+          }
+        }
+      }
+
+      if (invested <= 0 && avgPrice > 0 && quantity > 0) {
+        invested = quantity * avgPrice;
+      }
+
+      const marketPrice = Number(position.marketPrice || avgPrice || 0);
+      const marketValue = Number(position.marketValue ?? (quantity * marketPrice));
+      const hasCostBasis = avgPrice > 0 && invested > 0;
+      const unrealizedPnl = hasCostBasis ? (marketValue - invested) : 0;
+
+      return {
+        symbol: position.symbol,
+        assetType: position.assetType,
+        quantity,
+        averagePrice: avgPrice,
+        avgPrice,
+        invested,
+        marketPrice,
+        marketValue,
+        unrealizedPnl,
+        realizedPnl: Number(position.realizedPnl || 0),
+        costBasisKnown: hasCostBasis,
+        lastUpdatedAt: position.lastUpdatedAt
+      };
+    });
+
+    const totalInvested = reconciledPositions.reduce(
+      (sum, position) => sum + (position.costBasisKnown ? Number(position.invested || 0) : 0),
       0
     );
-    const positionsValue = positions.reduce(
-      (sum, position) => sum + (position.marketValue || position.quantity * (position.marketPrice || position.averagePrice || 0)),
+    const positionsValue = reconciledPositions.reduce(
+      (sum, position) => sum + Number(position.marketValue || 0),
       0
     );
     const openBuyOrders = orders.filter(
@@ -505,7 +589,7 @@ class PersistenceService {
     );
     const cashBalance = user.wallet?.cashBalance ?? user.currentBalance ?? 0;
     const unrealizedPnl = positionsValue - totalInvested;
-    const realizedPnl = positions.reduce((sum, p) => sum + Number(p.realizedPnl || 0), 0);
+    const realizedPnl = reconciledPositions.reduce((sum, p) => sum + Number(p.realizedPnl || 0), 0);
     const totalPnl = unrealizedPnl + realizedPnl;
 
     return {
@@ -528,19 +612,7 @@ class PersistenceService {
         realizedPnl,
         totalPnl
       },
-      positions: positions.map((position) => ({
-        symbol: position.symbol,
-        assetType: position.assetType,
-        quantity: position.quantity,
-        averagePrice: position.averagePrice,
-        avgPrice: position.averagePrice ?? position.avgPrice ?? (position.quantity > 0 ? position.invested / position.quantity : 0),
-        invested: position.invested,
-        marketPrice: position.marketPrice,
-        marketValue: position.marketValue,
-        unrealizedPnl: position.unrealizedPnl,
-        realizedPnl: position.realizedPnl,
-        lastUpdatedAt: position.lastUpdatedAt
-      })),
+      positions: reconciledPositions,
       orders: orders.map((order) => ({
         id: order.orderId,
         symbol: order.symbol,

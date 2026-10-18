@@ -530,11 +530,12 @@ function buildPositionsFromOrders(orders = []) {
     return Array.from(positionMap.values()).filter((position) => position.quantity > 0);
 }
 
-function buildPositionsFromRuntimeUser(userId) {
+function buildPositionsFromRuntimeUser(userId, existingPositions = []) {
     const user = users.get(userId);
     const orders = userOrders.get(userId) || [];
     const orderDerivedPositions = buildPositionsFromOrders(orders);
     const orderMap = new Map(orderDerivedPositions.map((position) => [position.symbol, position]));
+    const existingDbMap = new Map((existingPositions || []).map((position) => [position.symbol, position]));
 
     if (!user) {
         return orderDerivedPositions;
@@ -542,16 +543,40 @@ function buildPositionsFromRuntimeUser(userId) {
 
     return Array.from(user.positions.entries())
         .map(([symbol, quantity]) => {
-            const existing = orderMap.get(symbol);
+            const numQty = Number(quantity || 0);
+            const fromOrders = orderMap.get(symbol);
+            const fromDb = existingDbMap.get(symbol);
+
+            let avgPrice = Number(fromOrders?.avgPrice || 0);
+            let invested = Number(fromOrders?.invested || 0);
+
+            if ((!avgPrice || avgPrice <= 0) && fromDb) {
+                const dbAvg = Number(fromDb.averagePrice ?? fromDb.avgPrice ?? 0);
+                if (dbAvg > 0) {
+                    avgPrice = dbAvg;
+                    invested = Number(fromDb.invested || (numQty * avgPrice));
+                }
+            }
+
+            if ((!avgPrice || avgPrice <= 0) && invested > 0 && numQty > 0) {
+                avgPrice = invested / numQty;
+            }
+
+            const marketPrice = Number(fromOrders?.marketPrice || fromDb?.marketPrice || avgPrice || 0);
+            const marketValue = numQty * marketPrice;
+            const unrealizedPnl = (avgPrice > 0 && invested > 0) ? (marketValue - invested) : 0;
+
             return {
                 symbol,
                 assetType: inferAssetType(symbol),
-                quantity: Number(quantity || 0),
-                avgPrice: existing?.avgPrice || 0,
-                invested: Number(quantity || 0) * Number(existing?.avgPrice || 0),
-                marketPrice: existing?.marketPrice || 0,
-                marketValue: Number(quantity || 0) * Number(existing?.marketPrice || 0),
-                unrealizedPnl: existing?.unrealizedPnl || 0
+                quantity: numQty,
+                avgPrice,
+                averagePrice: avgPrice,
+                invested,
+                marketPrice,
+                marketValue,
+                unrealizedPnl,
+                realizedPnl: fromOrders?.realizedPnl || fromDb?.realizedPnl || 0
             };
         })
         .filter((position) => position.quantity !== 0);
@@ -565,7 +590,35 @@ async function syncUserSnapshot(userId) {
 
     await persistenceService.saveUserState(user);
 
-    const positions = buildPositionsFromRuntimeUser(userId);
+    let existingPositions = [];
+    if (persistenceService.isEnabled()) {
+        try {
+            existingPositions = await persistenceService.getPositions(userId);
+            if (!userOrders.has(userId) || userOrders.get(userId).length === 0) {
+                const persistedOrders = await persistenceService.getOrdersByUser(userId, 200);
+                if (persistedOrders.length > 0) {
+                    userOrders.set(userId, persistedOrders.map((o) => ({
+                        id: o.orderId,
+                        symbol: o.symbol,
+                        side: o.side,
+                        type: o.orderType,
+                        price: o.price,
+                        quantity: o.quantity,
+                        filled_qty: o.filled_qty,
+                        remaining_qty: o.remaining_qty,
+                        avg_fill_price: o.avg_fill_price,
+                        status: o.status,
+                        user_id: o.userId,
+                        timestamp: o.timestamp || o.createdAt
+                    })));
+                }
+            }
+        } catch (e) {
+            console.warn('Error reading existing positions/orders for sync snapshot:', e.message);
+        }
+    }
+
+    const positions = buildPositionsFromRuntimeUser(userId, existingPositions);
     await persistenceService.replacePositions(userId, positions);
 }
 

@@ -356,9 +356,10 @@ function PredictionCard({
 
   const currentSymbol = selectedAsset?.symbol || prediction?.symbol || 'RELIANCE.NS';
   const currentName = selectedAsset?.name || '';
-  const isUnavailable = prediction?.status === 'unavailable' || prediction?.supported === false;
-  const isError = prediction?.status === 'error';
-  const isInsufficient = prediction?.status === 'insufficient_data';
+  const isCryptoAsset = /BTC|ETH|USDT|CRYPTO|SOL|XRP/i.test(currentSymbol) || selectedAsset?.type === 'crypto';
+  const isUnavailable = isCryptoAsset || prediction?.status === 'unavailable' || prediction?.supported === false;
+  const isError = !isCryptoAsset && prediction?.status === 'error';
+  const isInsufficient = !isCryptoAsset && prediction?.status === 'insufficient_data';
   const isReady = prediction && !isUnavailable && !isError && !isInsufficient && !analyzing;
 
   // Signal extraction
@@ -441,7 +442,7 @@ function PredictionCard({
               <h2 className="selected-symbol-title">{currentSymbol}</h2>
               {currentName ? <span className="selected-asset-fullname">— {currentName}</span> : null}
               <span className={`coverage-badge ${isUnavailable ? 'unsupported' : 'supported'}`}>
-                {isUnavailable ? 'Model: Unsupported Asset' : '21D Model: Audited & Active'}
+                {isCryptoAsset ? 'Model: Unsupported Asset (Indian Equities Only)' : isUnavailable ? 'Model: Unsupported Asset' : '21D Model: Audited & Active'}
               </span>
             </div>
           </div>
@@ -559,17 +560,20 @@ function PredictionCard({
         </section>
       ) : null}
 
-      {/* 3. Prediction Unavailable State */}
+      {/* 3. Prediction Unavailable / Crypto State */}
       {!analyzing && isUnavailable ? (
         <section className="card prediction-unavailable-card">
-          <div className="unavailable-icon-shell">ⓘ</div>
+          <div className="unavailable-icon-shell">{isCryptoAsset ? '₿' : 'ⓘ'}</div>
           <h3>Prediction unavailable for this asset</h3>
           <p className="unavailable-main-msg">
-            The current prediction model does not support <strong>{currentSymbol}</strong> yet.
+            The current prediction model does not support <strong>{currentSymbol}</strong>.
           </p>
           <div className="unavailable-details-box">
             <p>
-              {prediction?.message || 'Our promoted 21-trading-day forecast focuses exclusively on supported Indian equities with verified fundamental valuation data. Cryptocurrency and non-covered assets are strictly isolated to prevent unvalidated predictions.'}
+              {isCryptoAsset
+                ? 'Our audited 21-trading-day quantitative model operates exclusively on NSE-listed Indian equities with verified fundamental valuation data, point-in-time statutory filings, and quarterly corporate disclosures. Cryptocurrency instruments are excluded to maintain strict mathematical integrity.'
+                : (prediction?.message || 'Our promoted 21-trading-day forecast focuses exclusively on supported Indian equities with verified fundamental valuation data. Cryptocurrency and non-covered assets are strictly isolated to prevent unvalidated predictions.')
+              }
             </p>
           </div>
           <div className="switch-to-supported-prompt">
@@ -624,137 +628,184 @@ function PredictionCard({
 
       {/* 6. Main AI Price Forecast Experience (Supported & Ready) */}
       {isReady ? (
-        <div className="forecast-display-stack">
-          {/* SECTION A: FORECAST HERO */}
-          <section className="card forecast-hero-card">
-            <div className="hero-header">
-              <div className="hero-header-left">
-                <span className="eyebrow forecast-eyebrow">AI PRICE FORECAST</span>
-                <span className="horizon-badge">21 Trading Days</span>
-              </div>
+        <div className="forecast-layout-grid">
+          {/* LEFT MAIN COLUMN: Bounded Chart, Price Range, and Factor Reasons */}
+          <div className="forecast-main-col">
+            {/* SECTION A: FORECAST HERO & BOUNDED CHART */}
+            <section className="card forecast-hero-card">
+              <div className="hero-header">
+                <div className="hero-header-left">
+                  <span className="eyebrow forecast-eyebrow">AI PRICE FORECAST</span>
+                  <span className="horizon-badge">{selectedHorizon === '5d' ? '5 Trading Days' : '21 Trading Days'}</span>
+                </div>
 
-              {/* Supported Horizon Selection */}
-              <div className="horizon-selector-row" role="group" aria-label="Forecast horizon selection">
-                <button
-                  type="button"
-                  className={`horizon-pill-btn ${selectedHorizon === '21d' ? 'active' : ''}`}
-                  onClick={() => setSelectedHorizon('21d')}
-                  title="Primary multi-factor quantitative model (21 trading days)"
-                >
-                  <span className="horizon-dot" />
-                  <span className="horizon-label">21 Trading Days</span>
-                  <span className="horizon-tag">Audited</span>
-                </button>
-                <button
-                  type="button"
-                  className={`horizon-pill-btn secondary ${selectedHorizon === '5d' ? 'active' : ''}`}
-                  onClick={() => setSelectedHorizon('5d')}
-                  title="Short-term 5-day directional momentum forecast (API v2)"
-                >
-                  <span className="horizon-label">5 Trading Days</span>
-                  <span className="horizon-tag">Short-Term</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="forecast-hero-body">
-              {/* Direction Indicator */}
-              <div className={`direction-badge direction-${signalLower}`}>
-                <span className="direction-dot" />
-                <span className="direction-text">{signal}</span>
-              </div>
-
-              {/* Movement Figure */}
-              <div className="expected-movement-block">
-                <span className="movement-label">Expected movement over next 21 trading days</span>
-                <div className={`movement-value ${expectedReturnPct >= 0 ? 'positive' : 'negative'}`}>
-                  {formatPct(expectedReturnPct)}
+                {/* Supported Horizon Selection */}
+                <div className="horizon-selector-row" role="group" aria-label="Forecast horizon selection">
+                  <button
+                    type="button"
+                    className={`horizon-pill-btn ${selectedHorizon === '21d' ? 'active' : ''}`}
+                    onClick={() => setSelectedHorizon('21d')}
+                    title="Primary multi-factor quantitative model (21 trading days)"
+                  >
+                    <span className="horizon-dot" />
+                    <span className="horizon-label">21 Trading Days</span>
+                    <span className="horizon-tag">Audited</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`horizon-pill-btn secondary ${selectedHorizon === '5d' ? 'active' : ''}`}
+                    onClick={() => setSelectedHorizon('5d')}
+                    title="Short-term 5-day directional momentum forecast (API v2)"
+                  >
+                    <span className="horizon-label">5 Trading Days</span>
+                    <span className="horizon-tag">Short-Term</span>
+                  </button>
                 </div>
               </div>
 
-              {/* Price Pair */}
-              <div className="hero-prices-grid">
-                <div className="hero-price-item">
-                  <span className="hero-price-label">Current Price</span>
-                  <span className="hero-price-number">{formatCurrency(currentPrice)}</span>
+              <div className="forecast-hero-body">
+                {/* Direction Indicator */}
+                <div className={`direction-badge direction-${signalLower}`}>
+                  <span className="direction-dot" />
+                  <span className="direction-text">{signal}</span>
                 </div>
-                <div className="hero-price-arrow">→</div>
-                <div className="hero-price-item highlight">
-                  <span className="hero-price-label">Expected Price</span>
-                  <span className="hero-price-number highlight-val">{formatCurrency(expectedPrice)}</span>
+
+                {/* Movement Figure */}
+                <div className="expected-movement-block">
+                  <span className="movement-label">Expected movement over {selectedHorizon === '5d' ? '5' : '21'} trading days</span>
+                  <div className={`movement-value ${expectedReturnPct >= 0 ? 'positive' : 'negative'}`}>
+                    {formatPct(expectedReturnPct)}
+                  </div>
+                </div>
+
+                {/* Price Pair */}
+                <div className="hero-prices-grid">
+                  <div className="hero-price-item">
+                    <span className="hero-price-label">Current Price</span>
+                    <span className="hero-price-number">{formatCurrency(currentPrice)}</span>
+                  </div>
+                  <div className="hero-price-arrow">→</div>
+                  <div className="hero-price-item highlight">
+                    <span className="hero-price-label">Expected Price</span>
+                    <span className="hero-price-number highlight-val">{formatCurrency(expectedPrice)}</span>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* HISTORICAL VS FORECAST TRAJECTORY CHART */}
-            <ForecastTrajectoryChart
-              currentPrice={currentPrice}
-              expectedPrice={expectedPrice}
-              lowerEstimate={lowerEstimate}
-              upperEstimate={upperEstimate}
-              expectedReturnPct={expectedReturnPct}
-              signal={signal}
-              horizonDays={selectedHorizon === '5d' ? 5 : 21}
-            />
-          </section>
+              {/* HISTORICAL VS FORECAST TRAJECTORY CHART (BOUNDED & RESPONSIVE) */}
+              <ForecastTrajectoryChart
+                currentPrice={currentPrice}
+                expectedPrice={expectedPrice}
+                lowerEstimate={lowerEstimate}
+                upperEstimate={upperEstimate}
+                expectedReturnPct={expectedReturnPct}
+                signal={signal}
+                horizonDays={selectedHorizon === '5d' ? 5 : 21}
+              />
+            </section>
 
-          {/* SECTION B: POSSIBLE PRICE RANGE */}
-          <section className="card section-card">
-            <div className="section-title-row">
-              <div>
-                <h3>Possible Price Range</h3>
-                <p className="section-subtext">Estimated movement range over 21 trading days</p>
-              </div>
-              <div className="range-pct-badge">
-                {q10Pct !== null && q90Pct !== null ? `${formatPct(q10Pct)} → ${formatPct(q90Pct)}` : '--'}
-              </div>
-            </div>
-
-            {/* 3-Column Estimate Cards */}
-            <div className="price-estimates-grid">
-              <div className="estimate-card lower-estimate">
-                <span className="estimate-label">Lower estimate</span>
-                <strong className="estimate-price">{formatCurrency(lowerEstimate)}</strong>
-                <span className="estimate-pct">{formatPct(q10Pct)}</span>
+            {/* SECTION B: POSSIBLE PRICE RANGE */}
+            <section className="card section-card price-range-card">
+              <div className="section-title-row">
+                <div>
+                  <h3>Possible Price Range</h3>
+                  <p className="section-subtext">Estimated movement range over {selectedHorizon === '5d' ? '5' : '21'} trading days</p>
+                </div>
+                <div className="range-pct-badge">
+                  {q10Pct !== null && q90Pct !== null ? `${formatPct(q10Pct)} → ${formatPct(q90Pct)}` : '--'}
+                </div>
               </div>
 
-              <div className="estimate-card expected-estimate">
-                <span className="estimate-label">Expected</span>
-                <strong className="estimate-price expected-price">{formatCurrency(expectedPrice)}</strong>
-                <span className="estimate-pct">{formatPct(expectedReturnPct)}</span>
+              {/* 3-Column Estimate Cards */}
+              <div className="price-estimates-grid">
+                <div className="estimate-card lower-estimate">
+                  <span className="estimate-label">Lower estimate</span>
+                  <strong className="estimate-price">{formatCurrency(lowerEstimate)}</strong>
+                  <span className="estimate-pct">{formatPct(q10Pct)}</span>
+                </div>
+
+                <div className="estimate-card expected-estimate">
+                  <span className="estimate-label">Expected</span>
+                  <strong className="estimate-price expected-price">{formatCurrency(expectedPrice)}</strong>
+                  <span className="estimate-pct">{formatPct(expectedReturnPct)}</span>
+                </div>
+
+                <div className="estimate-card upper-estimate">
+                  <span className="estimate-label">Upper estimate</span>
+                  <strong className="estimate-price">{formatCurrency(upperEstimate)}</strong>
+                  <span className="estimate-pct">{formatPct(q90Pct)}</span>
+                </div>
               </div>
 
-              <div className="estimate-card upper-estimate">
-                <span className="estimate-label">Upper estimate</span>
-                <strong className="estimate-price">{formatCurrency(upperEstimate)}</strong>
-                <span className="estimate-pct">{formatPct(q90Pct)}</span>
+              {/* Visual Corridor Bar */}
+              <div className="range-corridor-shell">
+                <div className="range-corridor-track">
+                  <div className="range-corridor-fill" />
+                  <div className="range-corridor-marker" />
+                </div>
               </div>
-            </div>
 
-            {/* Visual Corridor Bar */}
-            <div className="range-corridor-shell">
-              <div className="range-corridor-track">
-                <div className="range-corridor-fill" />
-                <div className="range-corridor-marker" />
+              <p className="helper-text range-helper-note">
+                Most modelled outcomes fall within this range. (Historical modelling interval; does not guarantee price bounds.)
+              </p>
+            </section>
+
+            {/* SECTION E: WHY THIS FORECAST? */}
+            <section className="card section-card factors-card">
+              <div className="section-title-row">
+                <div>
+                  <h3>Why this forecast?</h3>
+                  <p className="section-subtext">Key financial, technical, and market factors influencing the outlook</p>
+                </div>
               </div>
-            </div>
 
-            <p className="helper-text range-helper-note">
-              Most modelled outcomes fall within this range. (Historical modelling interval; does not guarantee price bounds.)
-            </p>
-          </section>
+              <div className="factors-columns-grid">
+                {/* Supporting Factors */}
+                <div className="factor-column positive-factors">
+                  <div className="factor-col-header">
+                    <span className="factor-icon-badge positive-badge">✓</span>
+                    <h4>Supporting factors</h4>
+                  </div>
+                  <ul className="factors-list">
+                    {positiveFactors.map((item, idx) => (
+                      <li key={idx} className="factor-item positive-factor-item">
+                        <span className="factor-bullet">•</span>
+                        <span>{item}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
 
-          {/* SECTION C & D: SIGNAL STRENGTH & UNCERTAINTY */}
-          <div className="dual-metrics-grid">
-            {/* C: Signal Probability */}
-            <section className="card metric-section-card">
+                {/* Factors Weighing on Forecast / Risk Factors */}
+                <div className="factor-column risk-factors">
+                  <div className="factor-col-header">
+                    <span className="factor-icon-badge warning-badge">⚠</span>
+                    <h4>Factors weighing on the forecast</h4>
+                  </div>
+                  <ul className="factors-list">
+                    {riskFactors.map((item, idx) => (
+                      <li key={idx} className="factor-item risk-factor-item">
+                        <span className="factor-bullet">•</span>
+                        <span>{item}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          {/* RIGHT SIDE PANEL: Probabilities, Uncertainty, Trading Desk & Action */}
+          <div className="forecast-side-panel">
+            {/* SECTION C: SIGNAL PROBABILITY */}
+            <section className="card metric-section-card side-metric-card">
               <div className="section-title-row">
                 <div>
                   <h3>Signal Probability</h3>
-                  <p className="section-subtext">Directional probability distribution</p>
+                  <p className="section-subtext">Dominant direction: {signal}</p>
                 </div>
                 <div className="signal-probability-badge">
-                  <span>Dominant direction:</span>
+                  <span>Lead:</span>
                   <strong>{signalProbability !== null ? `${signalProbability.toFixed(1)}%` : '--'}</strong>
                 </div>
               </div>
@@ -787,7 +838,7 @@ function PredictionCard({
                 </div>
                 <div className="legend-item">
                   <span className="legend-dot neutral-dot" />
-                  <span className="legend-name">NEUTRAL:</span>
+                  <span className="legend-name">NEUT:</span>
                   <span className="legend-value">{probNeutral !== null ? `${probNeutral.toFixed(1)}%` : '--'}</span>
                 </div>
                 <div className="legend-item">
@@ -797,26 +848,21 @@ function PredictionCard({
                 </div>
               </div>
 
-              {/* Honest Interpretation Note */}
               <p className="prob-interpretation-note">
                 {probNeutral > probUp && probNeutral > probDown
                   ? 'Signal is mixed — no direction has a dominant probability (Neutral consolidation is the largest modelled class).'
                   : Math.max(probUp || 0, probNeutral || 0, probDown || 0) < 45
                   ? 'Signal is mixed — no direction has a dominant probability.'
-                  : (probUp >= 45 ? 'Upward probability exhibits directional lead over alternatives.' : 'Downward probability exhibits directional lead over alternatives.')}
-              </p>
-
-              <p className="helper-text">
-                Model likelihood of the dominant movement path; does not imply certainty.
+                  : (probUp >= 45 ? 'Upward probability exhibits clear directional lead.' : 'Downward probability exhibits clear directional lead.')}
               </p>
             </section>
 
-            {/* D: Uncertainty */}
-            <section className="card metric-section-card">
+            {/* SECTION D: UNCERTAINTY */}
+            <section className="card metric-section-card side-metric-card">
               <div className="section-title-row">
                 <div>
                   <h3>Prediction Uncertainty</h3>
-                  <p className="section-subtext">Width of the plausible movement corridor</p>
+                  <p className="section-subtext">Width of plausible dispersion corridor</p>
                 </div>
               </div>
 
@@ -824,84 +870,54 @@ function PredictionCard({
                 <span className="uncertainty-big-number">
                   {uncertaintyPct !== null ? `${uncertaintyPct.toFixed(2)}%` : '--'}
                 </span>
-                <span className="uncertainty-pill">
+                <span className={`uncertainty-pill ${uncertaintyPct && uncertaintyPct > 15 ? 'elevated' : 'normal'}`}>
                   {uncertaintyPct && uncertaintyPct > 15 ? 'Elevated Dispersion' : 'Normal Dispersion'}
                 </span>
               </div>
 
               <p className="helper-text">
-                Higher values mean a wider range of possible outcomes.
+                Derived from 80% quantile spread (Q90 - Q10); reflects empirical historical volatility.
               </p>
             </section>
-          </div>
 
-          {/* INSTITUTIONAL DISCLAIMER & NOTICE BANNER */}
-          <div className="forecast-disclaimer-banner">
-            <span className="disclaimer-badge">ESTIMATE ONLY</span>
-            <p className="disclaimer-text">
-              Forecasts are probabilistic mathematical estimates calculated from historical market volatility, point-in-time technical momentum, and quarterly financial disclosures. They are not guaranteed outcomes, contractual price targets, or financial advice.
-            </p>
-          </div>
-
-          {/* SECTION E: WHY THIS FORECAST? */}
-          <section className="card section-card">
-            <div className="section-title-row">
-              <div>
-                <h3>Why this forecast?</h3>
-                <p className="section-subtext">Key financial, technical, and market factors influencing the 21-day outlook</p>
-              </div>
-            </div>
-
-            <div className="factors-columns-grid">
-              {/* Supporting Factors */}
-              <div className="factor-column positive-factors">
-                <div className="factor-col-header">
-                  <span className="factor-icon-badge positive-badge">✓</span>
-                  <h4>Supporting factors</h4>
+            {/* SECTION F: TRADING DESK VIEW & QUICK ACTION */}
+            <section className="card trading-view-card side-action-card">
+              <div className="trading-view-header">
+                <div>
+                  <span className="trading-view-eyebrow">Trading View</span>
+                  <h4>Platform Execution Suggestion</h4>
                 </div>
-                <ul className="factors-list">
-                  {positiveFactors.map((item, idx) => (
-                    <li key={idx} className="factor-item positive-factor-item">
-                      <span className="factor-bullet">•</span>
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              {/* Factors Weighing on Forecast / Risk Factors */}
-              <div className="factor-column risk-factors">
-                <div className="factor-col-header">
-                  <span className="factor-icon-badge warning-badge">⚠</span>
-                  <h4>Factors weighing on the forecast</h4>
+                <div className={`trading-action-tag action-${deskAction.toLowerCase()}`}>
+                  {deskAction}
                 </div>
-                <ul className="factors-list">
-                  {riskFactors.map((item, idx) => (
-                    <li key={idx} className="factor-item risk-factor-item">
-                      <span className="factor-bullet">•</span>
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
               </div>
-            </div>
-          </section>
+              <p className="trading-view-note">
+                {suggestion?.reason || 'Based on multi-factor quantitative conviction, price targets, and account exposure guidelines.'}
+              </p>
+              <button
+                type="button"
+                className="primary-button trade-from-prediction-btn"
+                onClick={() => {
+                  if (selectAsset) {
+                    selectAsset(selectedAsset || { symbol: currentSymbol, price: currentPrice });
+                  }
+                  if (typeof window !== 'undefined') {
+                    window.location.href = '/trade';
+                  }
+                }}
+              >
+                Trade {currentSymbol} in Terminal →
+              </button>
+            </section>
 
-          {/* SECTION F: TRADING VIEW (SEPARATE & SECONDARY) */}
-          <section className="card trading-view-card">
-            <div className="trading-view-header">
-              <div>
-                <span className="trading-view-eyebrow">Trading View</span>
-                <h4>Platform Execution Suggestion</h4>
-              </div>
-              <div className={`trading-action-tag action-${deskAction.toLowerCase()}`}>
-                {deskAction}
-              </div>
+            {/* DISCLAIMER & NOTICE */}
+            <div className="forecast-disclaimer-banner side-disclaimer">
+              <span className="disclaimer-badge">ESTIMATE ONLY</span>
+              <p className="disclaimer-text">
+                Probabilistic mathematical estimates calculated from historical market volatility, point-in-time technical momentum, and quarterly financial disclosures. Not guaranteed outcomes or financial advice.
+              </p>
             </div>
-            <p className="trading-view-note">
-              Based on the platform's trading rules and account position gating. Separate from the 21-day price forecast.
-            </p>
-          </section>
+          </div>
         </div>
       ) : null}
 

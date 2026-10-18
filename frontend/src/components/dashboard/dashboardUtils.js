@@ -18,14 +18,21 @@ export function getPositionMarketValue(position = {}, quote) {
 }
 
 export function getInvestedAmount(positions = []) {
-  return positions.reduce((sum, position) => sum + Number(position.invested || 0), 0);
+  return positions.reduce((sum, position) => {
+    const hasCost = position.costBasisKnown !== false && Number(position.invested || 0) > 0;
+    return sum + (hasCost ? Number(position.invested) : 0);
+  }, 0);
 }
 
 export function getUnrealizedPnl(positions = [], marketQuotes = {}) {
   return positions.reduce((sum, position) => {
+    const hasCost = position.costBasisKnown !== false && (Number(position.invested || 0) > 0 || Number(position.avgPrice || 0) > 0);
+    if (!hasCost) {
+      return sum;
+    }
     const marketValue = getPositionMarketValue(position, marketQuotes[position.symbol]);
     const cost = Number(position.invested || Number(position.quantity || 0) * Number(position.avgPrice || 0));
-    return sum + marketValue - cost;
+    return sum + (marketValue - cost);
   }, 0);
 }
 

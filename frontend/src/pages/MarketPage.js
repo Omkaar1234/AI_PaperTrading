@@ -241,22 +241,30 @@ function MarketPage({ trading }) {
 
           <div className="pagination-row markets-pagination">
             <button
+              type="button"
               className="secondary-button"
               onClick={() => {
-                setLocalPage((current) => Math.max(1, current - 1));
-                setPage((current) => Math.max(1, current - 1));
+                if (localPage > 1) {
+                  setLocalPage((current) => current - 1);
+                } else if (page > 1) {
+                  setPage((current) => current - 1);
+                  setLocalPage(1);
+                }
               }}
               disabled={localPage <= 1 && page <= 1}
             >
               Previous
             </button>
-            <span>Page {localPage} of {localTotalPages} · {filteredStocks.length.toLocaleString('en-IN')} matches</span>
+            <span className="pagination-info tabular-nums">
+              Page {localPage} of {localTotalPages} · {filteredStocks.length.toLocaleString('en-IN')} stocks
+            </span>
             <button
+              type="button"
               className="secondary-button"
               onClick={() => {
                 if (localPage < localTotalPages) {
                   setLocalPage((current) => current + 1);
-                } else {
+                } else if (pagination.hasNextPage) {
                   setPage((current) => current + 1);
                   setLocalPage(1);
                 }

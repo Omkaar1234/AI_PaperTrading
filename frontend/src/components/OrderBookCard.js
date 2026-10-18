@@ -1,6 +1,37 @@
 import React, { useState, useMemo } from 'react';
 import { formatINR } from '../constants';
 
+function generateDemoDepth(basePrice = 1500) {
+  const p = Number(basePrice) > 0 ? Number(basePrice) : 1500;
+  const spread = Math.max(0.4, Number((p * 0.0006).toFixed(2))); // ~0.06% spread
+  const bestBid = Number((p - spread / 2).toFixed(2));
+  const bestAsk = Number((p + spread / 2).toFixed(2));
+
+  const demoBids = [];
+  const demoAsks = [];
+
+  const bidQuantities = [85, 140, 220, 310, 480, 620, 850, 1100, 1450, 1900];
+  const askQuantities = [75, 130, 210, 290, 450, 600, 810, 1050, 1380, 1850];
+
+  for (let i = 0; i < 10; i++) {
+    const step = i * Number((p * 0.0008).toFixed(2));
+    demoBids.push({
+      id: `demo-bid-${i}`,
+      price: Number(Math.max(0.05, bestBid - step).toFixed(2)),
+      remaining: bidQuantities[i],
+      quantity: bidQuantities[i]
+    });
+    demoAsks.push({
+      id: `demo-ask-${i}`,
+      price: Number((bestAsk + step).toFixed(2)),
+      remaining: askQuantities[i],
+      quantity: askQuantities[i]
+    });
+  }
+
+  return { bids: demoBids, asks: demoAsks };
+}
+
 function OrderBookCard({
   compact = false,
   orderBook = { bids: [], asks: [] },
@@ -13,24 +44,34 @@ function OrderBookCard({
 }) {
   const [depthMode, setDepthMode] = useState('cumulative'); // 'cumulative' | 'single'
   const [mobileView, setMobileView] = useState('both'); // 'both' | 'bids' | 'asks'
+  const [depthSource, setDepthSource] = useState('engine'); // 'engine' | 'demo'
 
   const symbol = orderBook?.symbol || selectedAsset?.symbol || 'Instrument';
+  const currentPrice = Number(selectedAsset?.price || 1500);
+
+  // Active data source: real engine book or isolated illustrative demo book
+  const activeBook = useMemo(() => {
+    if (depthSource === 'demo') {
+      return generateDemoDepth(currentPrice);
+    }
+    return orderBook || { bids: [], asks: [] };
+  }, [depthSource, currentPrice, orderBook]);
 
   // Normalize bids: sorted descending by price (highest bid first)
   const sortedBids = useMemo(() => {
-    const list = Array.isArray(orderBook?.bids) ? orderBook.bids : [];
+    const list = Array.isArray(activeBook?.bids) ? activeBook.bids : [];
     return [...list]
       .filter((o) => Number(o.price) > 0 && Number(o.remaining ?? o.remaining_qty ?? o.quantity ?? 0) > 0)
       .sort((a, b) => Number(b.price) - Number(a.price));
-  }, [orderBook?.bids]);
+  }, [activeBook?.bids]);
 
   // Normalize asks: sorted ascending by price (lowest ask first)
   const sortedAsks = useMemo(() => {
-    const list = Array.isArray(orderBook?.asks) ? orderBook.asks : [];
+    const list = Array.isArray(activeBook?.asks) ? activeBook.asks : [];
     return [...list]
       .filter((o) => Number(o.price) > 0 && Number(o.remaining ?? o.remaining_qty ?? o.quantity ?? 0) > 0)
       .sort((a, b) => Number(a.price) - Number(b.price));
-  }, [orderBook?.asks]);
+  }, [activeBook?.asks]);
 
   const displayBids = compact ? sortedBids.slice(0, 8) : sortedBids.slice(0, 15);
   const displayAsks = compact ? sortedAsks.slice(0, 8) : sortedAsks.slice(0, 15);
@@ -97,7 +138,7 @@ function OrderBookCard({
   const hasAsks = asksWithTotals.length > 0;
   const isBookEmpty = !hasBids && !hasAsks;
 
-  const resolvedError = error || orderBook?.error || (!isEngineConnected ? 'Matching engine disconnected' : null);
+  const resolvedError = depthSource === 'demo' ? null : (error || orderBook?.error || (!isEngineConnected ? 'Matching engine disconnected' : null));
 
   return (
     <section className="card orderbook-terminal-card" aria-label="Market order book depth">
@@ -106,9 +147,15 @@ function OrderBookCard({
         <div className="orderbook-title-group">
           <div className="orderbook-eyebrow-row">
             <span className="orderbook-eyebrow">Level 2 Market Depth</span>
-            <span className="orderbook-scope-badge" title="Simulated order book executed in UPRISE matching engine">
-              Matching Engine Book
-            </span>
+            {depthSource === 'demo' ? (
+              <span className="orderbook-scope-badge demo-badge" title="Simulated illustrative demo order book">
+                Demo Depth Active
+              </span>
+            ) : (
+              <span className="orderbook-scope-badge" title="Simulated order book executed in UPRISE matching engine">
+                Matching Engine Book
+              </span>
+            )}
           </div>
           <div className="orderbook-heading-flex">
             <h3 className="orderbook-title">{symbol}</h3>
@@ -117,6 +164,26 @@ function OrderBookCard({
         </div>
 
         <div className="orderbook-controls-group">
+          {/* SOURCE TOGGLE: LIVE ENGINE VS DEMO DEPTH */}
+          <div className="orderbook-mode-toggle source-toggle" role="group" aria-label="Order book depth source">
+            <button
+              type="button"
+              className={`mode-btn ${depthSource === 'engine' ? 'active' : ''}`}
+              onClick={() => setDepthSource('engine')}
+              title="Real-time matching engine book"
+            >
+              Engine Feed
+            </button>
+            <button
+              type="button"
+              className={`mode-btn ${depthSource === 'demo' ? 'active' : ''}`}
+              onClick={() => setDepthSource('demo')}
+              title="Illustrative demo depth visualization"
+            >
+              Demo Depth
+            </button>
+          </div>
+
           {/* DEPTH MODE TOGGLE */}
           <div className="orderbook-mode-toggle" role="group" aria-label="Depth visualization mode">
             <button
@@ -141,13 +208,25 @@ function OrderBookCard({
           <div className="orderbook-status-pill">
             <span
               className={`status-pulse-dot ${
-                resolvedError ? 'error-dot' : loading ? 'loading-dot' : 'live-dot'
+                depthSource === 'demo'
+                  ? 'demo-dot'
+                  : resolvedError
+                  ? 'error-dot'
+                  : loading
+                  ? 'loading-dot'
+                  : 'live-dot'
               }`}
             />
             <span className="status-text tabular-nums">
-              {loading ? 'Updating...' : lastUpdated ? `Synced ${lastUpdated}` : 'Real-time Feed'}
+              {depthSource === 'demo'
+                ? 'Illustrative'
+                : loading
+                ? 'Updating...'
+                : lastUpdated
+                ? `Synced ${lastUpdated}`
+                : 'Real-time Feed'}
             </span>
-            {onRefresh && (
+            {depthSource === 'engine' && onRefresh && (
               <button
                 type="button"
                 className="orderbook-refresh-icon-btn"
@@ -163,8 +242,25 @@ function OrderBookCard({
         </div>
       </div>
 
+      {/* DEMO DEPTH WARNING BANNER */}
+      {depthSource === 'demo' && (
+        <div className="orderbook-demo-warning-banner" role="alert">
+          <div className="warning-icon" aria-hidden="true">⚠️</div>
+          <div className="warning-body">
+            <strong>SIMULATED DEMO DATA — NOT REAL MARKET LIQUIDITY:</strong> Illustrative Level 2 depth preview for educational visualization. Not connected to the matching engine and cannot be executed.
+          </div>
+          <button
+            type="button"
+            className="secondary-button switch-to-live-btn"
+            onClick={() => setDepthSource('engine')}
+          >
+            Switch to Live Engine Book
+          </button>
+        </div>
+      )}
+
       {/* DISCONNECTED OR ERROR ALERT BANNER */}
-      {resolvedError && (
+      {depthSource === 'engine' && resolvedError && (
         <div className="orderbook-error-banner" role="alert">
           <div className="error-icon" aria-hidden="true">⚠️</div>
           <div className="error-body">
@@ -242,7 +338,7 @@ function OrderBookCard({
           type="button"
           role="tab"
           aria-selected={mobileView === 'both'}
-          className={`mobile-view-tab ${mobileView === 'both' ? 'active' : ''}`}
+          className={`mobile-tab-btn ${mobileView === 'both' ? 'active' : ''}`}
           onClick={() => setMobileView('both')}
         >
           Both Sides
@@ -251,7 +347,7 @@ function OrderBookCard({
           type="button"
           role="tab"
           aria-selected={mobileView === 'bids'}
-          className={`mobile-view-tab bids-tab ${mobileView === 'bids' ? 'active' : ''}`}
+          className={`mobile-tab-btn ${mobileView === 'bids' ? 'active' : ''}`}
           onClick={() => setMobileView('bids')}
         >
           Bids ({bidsWithTotals.length})
@@ -260,24 +356,22 @@ function OrderBookCard({
           type="button"
           role="tab"
           aria-selected={mobileView === 'asks'}
-          className={`mobile-view-tab asks-tab ${mobileView === 'asks' ? 'active' : ''}`}
+          className={`mobile-tab-btn ${mobileView === 'asks' ? 'active' : ''}`}
           onClick={() => setMobileView('asks')}
         >
           Asks ({asksWithTotals.length})
         </button>
       </div>
 
-      {/* DUAL ORDER BOOK GRID */}
+      {/* SKELETON OR EMPTY BOOK STATE */}
       {loading && isBookEmpty ? (
-        <div className="orderbook-skeleton-grid" aria-label="Loading order depth...">
-          <div className="skeleton-col">
-            <div className="skeleton-row" />
+        <div className="orderbook-skeleton-grid" aria-label="Loading order book depth">
+          <div className="orderbook-skeleton-col">
             <div className="skeleton-row" />
             <div className="skeleton-row" />
             <div className="skeleton-row" />
           </div>
-          <div className="skeleton-col">
-            <div className="skeleton-row" />
+          <div className="orderbook-skeleton-col">
             <div className="skeleton-row" />
             <div className="skeleton-row" />
             <div className="skeleton-row" />
@@ -285,25 +379,32 @@ function OrderBookCard({
         </div>
       ) : isBookEmpty ? (
         <div className="orderbook-empty-state">
-          <div className="empty-state-icon">📭</div>
-          <h4>Order Book is Empty</h4>
-          <p>
+          <div className="empty-book-icon" aria-hidden="true">📖</div>
+          <h4 className="empty-book-title">Order Book is Empty</h4>
+          <p className="empty-book-subtitle text-muted">
             No active resting limit orders for <strong>{symbol}</strong> in the UPRISE matching engine.
+            Place a resting limit order in the Trade Terminal or switch to <strong>Demo Depth</strong> to inspect visual depth.
           </p>
-          <div className="empty-state-hint">
-            <strong>Trading Notice:</strong> Market orders submitted into an empty book cancel immediately to protect against zero-liquidity execution. Place a <strong>Limit Order</strong> to provide initial resting liquidity.
-          </div>
+          {depthSource !== 'demo' && (
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setDepthSource('demo')}
+            >
+              Preview Illustrative Demo Depth
+            </button>
+          )}
         </div>
       ) : (
-        <div className={`orderbook-dual-grid mobile-view-${mobileView}`}>
-          {/* BUY / BIDS COLUMN */}
+        /* BALANCED L2 TWO-COLUMN DEPTH LADDER */
+        <div className={`orderbook-columns-container ${mobileView !== 'both' ? `mobile-view-${mobileView}` : ''}`}>
+          {/* BIDS COLUMN (BUYERS - GREEN) */}
           {(mobileView === 'both' || mobileView === 'bids') && (
-            <div className="orderbook-half orderbook-bids-half">
-              <div className="orderbook-side-title buy-side-title">
-                <span className="side-indicator-dot buy-dot" aria-hidden="true" />
-                <span className="side-title-text">BUY ORDERS (BIDS)</span>
-                <span className="side-depth-badge text-positive tabular-nums">
-                  {totalBidQty.toLocaleString('en-IN')} units
+            <div className="orderbook-col bids-col">
+              <div className="orderbook-col-header">
+                <span className="col-side-label text-positive">Bids (Buy Orders)</span>
+                <span className="col-total-qty tabular-nums text-muted">
+                  Total: {totalBidQty.toLocaleString('en-IN')} units
                 </span>
               </div>
 
@@ -368,14 +469,13 @@ function OrderBookCard({
             </div>
           )}
 
-          {/* SELL / ASKS COLUMN */}
+          {/* ASKS COLUMN (SELLERS - RED) */}
           {(mobileView === 'both' || mobileView === 'asks') && (
-            <div className="orderbook-half orderbook-asks-half">
-              <div className="orderbook-side-title sell-side-title">
-                <span className="side-indicator-dot sell-dot" aria-hidden="true" />
-                <span className="side-title-text">SELL ORDERS (ASKS)</span>
-                <span className="side-depth-badge text-negative tabular-nums">
-                  {totalAskQty.toLocaleString('en-IN')} units
+            <div className="orderbook-col asks-col">
+              <div className="orderbook-col-header">
+                <span className="col-side-label text-negative">Asks (Sell Orders)</span>
+                <span className="col-total-qty tabular-nums text-muted">
+                  Total: {totalAskQty.toLocaleString('en-IN')} units
                 </span>
               </div>
 

@@ -7,7 +7,8 @@ function OrdersTable({
   embedded = false,
   cancellingOrderId = null
 }) {
-  const [filterTab, setFilterTab] = useState('ALL'); // 'ALL' | 'ACTIVE' | 'FILLED' | 'CANCELLED'
+  const [filterTab, setFilterTab] = useState('ALL'); // 'ALL' | 'ACTIVE' | 'FILLED' | 'PARTIAL' | 'CANCELLED'
+  const [searchQuery, setSearchQuery] = useState('');
 
   const normalizedOrders = useMemo(() => {
     return [...orders].map((order) => {
@@ -32,6 +33,7 @@ function OrdersTable({
   const metrics = useMemo(() => {
     let active = 0;
     let filled = 0;
+    let partial = 0;
     let cancelled = 0;
     let totalFilledUnits = 0;
     let totalOrderedUnits = 0;
@@ -39,8 +41,11 @@ function OrdersTable({
     normalizedOrders.forEach((o) => {
       totalOrderedUnits += o.totalQty;
       totalFilledUnits += o.filledQty;
-      if (o.rawStatus === 'OPEN' || o.rawStatus === 'PARTIALLY_FILLED' || o.rawStatus === 'PENDING_SUBMISSION') {
+      if (o.rawStatus === 'OPEN' || o.rawStatus === 'PENDING_SUBMISSION') {
         active += 1;
+      } else if (o.rawStatus === 'PARTIALLY_FILLED') {
+        active += 1;
+        partial += 1;
       } else if (o.rawStatus === 'FILLED') {
         filled += 1;
       } else if (o.rawStatus === 'CANCELLED' || o.rawStatus === 'REJECTED') {
@@ -53,6 +58,7 @@ function OrdersTable({
       total: normalizedOrders.length,
       active,
       filled,
+      partial,
       cancelled,
       overallFillRate
     };
@@ -61,6 +67,13 @@ function OrdersTable({
   // Filtered orders list
   const filteredOrders = useMemo(() => {
     return normalizedOrders.filter((order) => {
+      if (searchQuery.trim()) {
+        const q = searchQuery.trim().toLowerCase();
+        if (!order.symbol.toLowerCase().includes(q)) {
+          return false;
+        }
+      }
+
       if (filterTab === 'ACTIVE') {
         return (
           order.rawStatus === 'OPEN' ||
@@ -71,12 +84,15 @@ function OrdersTable({
       if (filterTab === 'FILLED') {
         return order.rawStatus === 'FILLED';
       }
+      if (filterTab === 'PARTIAL') {
+        return order.rawStatus === 'PARTIALLY_FILLED';
+      }
       if (filterTab === 'CANCELLED') {
         return order.rawStatus === 'CANCELLED' || order.rawStatus === 'REJECTED';
       }
       return true;
     });
-  }, [normalizedOrders, filterTab]);
+  }, [normalizedOrders, filterTab, searchQuery]);
 
   const getStatusBadge = (order) => {
     switch (order.rawStatus) {
@@ -111,7 +127,7 @@ function OrdersTable({
     if (order.rawStatus === 'PARTIALLY_FILLED') {
       return (
         <span className="order-note-subtext text-warning">
-          {order.filledQty} filled @ ₹{Number(order.avg_fill_price || order.price).toFixed(2)} · {order.remainingQty} resting
+          {order.filledQty} filled @ ₹{Number(order.avg_fill_price || order.price || 0).toFixed(2)} · {order.remainingQty} resting
         </span>
       );
     }
@@ -121,7 +137,7 @@ function OrdersTable({
     if (order.rawStatus === 'FILLED') {
       return (
         <span className="order-note-subtext text-positive">
-          Matched @ ₹{Number(order.avg_fill_price || order.price).toFixed(2)}
+          Matched @ ₹{Number(order.avg_fill_price || order.price || 0).toFixed(2)}
         </span>
       );
     }
@@ -134,16 +150,30 @@ function OrdersTable({
   return (
     <section className={embedded ? 'orders-embedded-container' : 'card orders-card'} aria-label="Orders history">
       {!embedded && (
-        <div className="section-heading">
+        <div className="section-heading orders-heading-split">
           <div>
             <p className="eyebrow">Execution Records</p>
             <h3 className="orders-title">Order Lifecycle & Status</h3>
           </div>
-          {orders.length > 0 && (
-            <span className="badge-text neutral-badge">
-              {orders.length} Total {orders.length === 1 ? 'Order' : 'Orders'}
-            </span>
-          )}
+          <div className="orders-top-actions">
+            {orders.length > 5 && (
+              <div className="orders-search-box">
+                <input
+                  type="text"
+                  placeholder="Filter by symbol..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="table-search-input"
+                  aria-label="Filter orders by symbol"
+                />
+              </div>
+            )}
+            {orders.length > 0 && (
+              <span className="badge-text neutral-badge">
+                {orders.length} Total {orders.length === 1 ? 'Order' : 'Orders'}
+              </span>
+            )}
+          </div>
         </div>
       )}
 
@@ -199,6 +229,17 @@ function OrdersTable({
           >
             Filled ({metrics.filled})
           </button>
+          {metrics.partial > 0 && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={filterTab === 'PARTIAL'}
+              className={`filter-tab ${filterTab === 'PARTIAL' ? 'active' : ''}`}
+              onClick={() => setFilterTab('PARTIAL')}
+            >
+              Partial ({metrics.partial})
+            </button>
+          )}
           <button
             type="button"
             role="tab"
@@ -223,7 +264,7 @@ function OrdersTable({
                 <th className="text-center">Side</th>
                 <th className="text-left">Type</th>
                 <th className="text-right">Execution Progress</th>
-                <th className="text-right">Order / Exec. Price</th>
+                <th className="text-right">Price / Fill</th>
                 <th className="text-center">Status</th>
                 <th className="text-center">Action</th>
               </tr>
@@ -287,13 +328,26 @@ function OrdersTable({
                     </td>
                     <td className="text-right tabular-nums font-medium">
                       <div className="order-price-cell">
-                        <strong>
-                          {formatINR(order.avg_fill_price || order.price || 0)}
-                        </strong>
-                        {order.avg_fill_price && order.avg_fill_price !== order.price && (
-                          <span className="limit-ref-text text-muted text-xs">
-                            Limit: {formatINR(order.price || 0)}
-                          </span>
+                        {order.filledQty > 0 ? (
+                          <>
+                            <strong className="exec-price-text">
+                              {formatINR(order.avg_fill_price || order.price || 0)}
+                            </strong>
+                            {order.type === 'LIMIT' && (
+                              <span className="limit-ref-text text-muted text-xs">
+                                Limit: {formatINR(order.price || 0)}
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <strong>
+                              {order.type === 'LIMIT' && Number(order.price) > 0 ? formatINR(order.price) : 'Market'}
+                            </strong>
+                            <span className="not-executed-tag text-muted text-xs">
+                              Not executed
+                            </span>
+                          </>
                         )}
                       </div>
                     </td>
@@ -306,7 +360,7 @@ function OrdersTable({
                           type="button"
                           className="cancel-order-button"
                           onClick={() => cancelOrder(order)}
-                          disabled={isThisOrderCancelling}
+                          disabled={Boolean(isThisOrderCancelling || cancellingOrderId)}
                           title={`Cancel resting order ${order.id}`}
                           aria-label={`Cancel order ${order.id}`}
                         >

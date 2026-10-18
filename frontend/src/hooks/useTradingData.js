@@ -389,22 +389,46 @@ export function useTradingData(authenticatedUser) {
       }
 
       if (Array.isArray(nextPortfolio?.positions) && nextPortfolio.positions.length > 0) {
+        const currentOrders = Array.isArray(nextPortfolio?.orders) ? nextPortfolio.orders : [];
         setPositions(nextPortfolio.positions.map((position) => {
           const quantity = Number(position.quantity || 0);
-          const avgPrice = Number(position.averagePrice ?? position.avgPrice ?? 0);
-          const invested = Number(position.invested ?? (quantity * avgPrice));
-          const livePrice = Number(marketQuotes[position.symbol]?.price || position.marketPrice || avgPrice || 0);
+          let avgPrice = Number(position.averagePrice ?? position.avgPrice ?? 0);
+          let invested = Number(position.invested ?? 0);
+
+          if ((!avgPrice || avgPrice <= 0) && quantity > 0) {
+            const buyOrders = currentOrders.filter(
+              (o) => o.symbol === position.symbol && o.side === 'BUY' && Number(o.filled_qty || 0) > 0
+            );
+            if (buyOrders.length > 0) {
+              const totalCost = buyOrders.reduce((sum, o) => sum + Number(o.filled_qty) * Number(o.avg_fill_price || o.price || 0), 0);
+              const totalQty = buyOrders.reduce((sum, o) => sum + Number(o.filled_qty), 0);
+              if (totalQty > 0) {
+                avgPrice = totalCost / totalQty;
+                invested = quantity * avgPrice;
+              }
+            }
+          }
+
+          if (invested <= 0 && avgPrice > 0 && quantity > 0) {
+            invested = quantity * avgPrice;
+          }
+
+          const hasCostBasis = avgPrice > 0 && invested > 0;
+          const livePrice = Number(marketQuotes[position.symbol]?.price || position.marketPrice || (hasCostBasis ? avgPrice : 0));
           const marketValue = quantity * livePrice;
+          const unrealizedPnl = hasCostBasis ? marketValue - invested : null;
+
           return {
             symbol: position.symbol,
             assetType: position.assetType,
             quantity,
-            avgPrice,
-            averagePrice: avgPrice,
-            invested,
+            avgPrice: hasCostBasis ? avgPrice : null,
+            averagePrice: hasCostBasis ? avgPrice : null,
+            invested: hasCostBasis ? invested : null,
             marketPrice: livePrice,
             marketValue,
-            unrealizedPnl: marketValue - invested
+            unrealizedPnl,
+            costBasisKnown: hasCostBasis
           };
         }));
       } else {
@@ -434,20 +458,43 @@ export function useTradingData(authenticatedUser) {
       const nextPositions = positionsResponse.data.positions?.length
         ? positionsResponse.data.positions.map((position) => {
             const quantity = Number(position.quantity || 0);
-            const avgPrice = Number(position.averagePrice ?? position.avgPrice ?? 0);
-            const invested = Number(position.invested ?? (quantity * avgPrice));
-            const livePrice = Number(marketQuotes[position.symbol]?.price || position.marketPrice || avgPrice || 0);
+            let avgPrice = Number(position.averagePrice ?? position.avgPrice ?? 0);
+            let invested = Number(position.invested ?? 0);
+
+            if ((!avgPrice || avgPrice <= 0) && quantity > 0) {
+              const buyOrders = nextOrders.filter(
+                (o) => o.symbol === position.symbol && o.side === 'BUY' && Number(o.filled_qty || 0) > 0
+              );
+              if (buyOrders.length > 0) {
+                const totalCost = buyOrders.reduce((sum, o) => sum + Number(o.filled_qty) * Number(o.avg_fill_price || o.price || 0), 0);
+                const totalQty = buyOrders.reduce((sum, o) => sum + Number(o.filled_qty), 0);
+                if (totalQty > 0) {
+                  avgPrice = totalCost / totalQty;
+                  invested = quantity * avgPrice;
+                }
+              }
+            }
+
+            if (invested <= 0 && avgPrice > 0 && quantity > 0) {
+              invested = quantity * avgPrice;
+            }
+
+            const hasCostBasis = avgPrice > 0 && invested > 0;
+            const livePrice = Number(marketQuotes[position.symbol]?.price || position.marketPrice || (hasCostBasis ? avgPrice : 0));
             const marketValue = quantity * livePrice;
+            const unrealizedPnl = hasCostBasis ? marketValue - invested : null;
+
             return {
               symbol: position.symbol,
               assetType: position.assetType,
               quantity,
-              avgPrice,
-              averagePrice: avgPrice,
-              invested,
+              avgPrice: hasCostBasis ? avgPrice : null,
+              averagePrice: hasCostBasis ? avgPrice : null,
+              invested: hasCostBasis ? invested : null,
               marketPrice: livePrice,
               marketValue,
-              unrealizedPnl: marketValue - invested
+              unrealizedPnl,
+              costBasisKnown: hasCostBasis
             };
           })
         : buildPositionsFromOrders(nextOrders, marketQuotes);
