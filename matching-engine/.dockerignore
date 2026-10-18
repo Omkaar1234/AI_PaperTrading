@@ -1,0 +1,4 @@
+build/
+*.log
+trades.log
+.git/

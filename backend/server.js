@@ -37,27 +37,68 @@ dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
 
 const app = express();
 const server = http.createServer(app);
-const PORT = process.env.BACKEND_PORT || 3001;
+const PORT = process.env.PORT || process.env.BACKEND_PORT || 3001;
 const ML_SERVICE_URL = `http://${process.env.ML_HOST || 'localhost'}:${process.env.ML_PORT || 5000}`;
 const MATCHING_ENGINE_HOST = process.env.MATCHING_ENGINE_HOST || 'localhost';
 const MATCHING_ENGINE_PORT = process.env.MATCHING_ENGINE_PORT || 9000;
 
 // Middleware
-const allowedOrigins = (process.env.CORS_ORIGIN || process.env.FRONTEND_URL || 'http://localhost:3000')
-    .split(',')
+const configuredOrigins = [
+    process.env.CORS_ORIGIN,
+    process.env.FRONTEND_URL
+]
+    .filter(Boolean)
+    .flatMap((val) => val.split(','))
     .map((origin) => origin.trim())
     .filter(Boolean);
 
-app.use(cors({
+const isProduction = process.env.NODE_ENV === 'production' || Boolean(process.env.RAILWAY_ENVIRONMENT);
+
+const localOrigins = [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    `http://localhost:${process.env.FRONTEND_PORT || 3000}`,
+    `http://127.0.0.1:${process.env.FRONTEND_PORT || 3000}`
+];
+
+const allowedOrigins = Array.from(new Set([
+    ...configuredOrigins,
+    ...(isProduction && configuredOrigins.length > 0 ? [] : localOrigins)
+]));
+
+function isAllowedOrigin(origin) {
+    if (!origin) {
+        return true;
+    }
+    if (allowedOrigins.includes(origin)) {
+        return true;
+    }
+    if (!isProduction) {
+        try {
+            const parsed = new URL(origin);
+            if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+                return true;
+            }
+        } catch (_) {}
+    }
+    return false;
+}
+
+const corsOptions = {
     origin(origin, callback) {
-        if (!origin || allowedOrigins.includes(origin)) {
+        if (isAllowedOrigin(origin)) {
             callback(null, true);
             return;
         }
         callback(new Error('Origin not allowed by CORS'));
     },
-    credentials: true
-}));
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(cookieParser());
 app.use(express.json());
 app.use(optionalAuth);
@@ -2100,10 +2141,11 @@ async function startServer() {
             resolve(err.code === 'EADDRINUSE');
         });
         testServer.once('listening', () => {
-            testServer.close();
-            resolve(false);
+            testServer.close(() => {
+                resolve(false);
+            });
         });
-        testServer.listen(PORT);
+        testServer.listen(PORT, '0.0.0.0');
     });
 
     if (portInUse) {
@@ -2118,7 +2160,7 @@ async function startServer() {
         process.exit(1);
     }
 
-    server.listen(PORT, () => {
+    server.listen(PORT, '0.0.0.0', () => {
         console.log('====================================');
         console.log('  AI Trading - Backend API');
         console.log('  Version 1.1.0');

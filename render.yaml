@@ -1,0 +1,112 @@
+# ==============================================================================
+# UPRISE — Render Blueprint Infrastructure as Code
+# Multi-Service Architecture: Matching Engine (C++ TCP), ML Service (Python HTTP),
+# Backend Orchestrator (Node.js Web + WSS), and Frontend (React Static Site).
+# ==============================================================================
+
+services:
+  # ============================================================================
+  # 1. C++ MATCHING ENGINE (Internal Low-Latency TCP Service)
+  # ============================================================================
+  - type: pserv
+    name: uprise-matching-engine
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./matching-engine/Dockerfile
+    dockerContext: ./matching-engine
+
+  # ============================================================================
+  # 2. PYTHON ML SERVICE (Internal Inference Service)
+  # ============================================================================
+  - type: pserv
+    name: uprise-ml-service
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./ml-service/Dockerfile
+    dockerContext: ./ml-service
+
+  # ============================================================================
+  # 3. NODE.JS BACKEND (Public API & WebSocket Web Service)
+  # ============================================================================
+  - type: web
+    name: uprise-backend
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: BACKEND_PORT
+        value: "3001"
+      - key: PORT
+        value: "3001"
+      - key: BACKEND_HOST
+        value: "0.0.0.0"
+      - key: FRONTEND_URL
+        value: https://uprise-frontend.onrender.com
+      - key: CORS_ORIGIN
+        value: https://uprise-frontend.onrender.com
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: COOKIE_SAME_SITE
+        value: none
+      - key: MATCHING_ENGINE_HOST
+        fromService:
+          type: pserv
+          name: uprise-matching-engine
+          property: host
+      - key: MATCHING_ENGINE_PORT
+        fromService:
+          type: pserv
+          name: uprise-matching-engine
+          property: port
+      - key: ML_HOST
+        fromService:
+          type: pserv
+          name: uprise-ml-service
+          property: host
+      - key: ML_PORT
+        fromService:
+          type: pserv
+          name: uprise-ml-service
+          property: port
+      - key: MONGODB_ENABLED
+        value: "true"
+      - key: MONGODB_DB
+        value: paper_trading
+      - key: MONGODB_CONNECT_TIMEOUT_MS
+        value: "10000"
+      - key: GOOGLE_CALLBACK_URL
+        value: https://uprise-backend.onrender.com/api/auth/google/callback
+      # Secrets entered securely via Render Dashboard (never stored in Git)
+      - key: JWT_SECRET
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+
+  # ============================================================================
+  # 4. REACT FRONTEND (Global CDN Static Site)
+  # ============================================================================
+  - type: web
+    name: uprise-frontend
+    runtime: static
+    plan: free
+    region: oregon
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: ./frontend/build
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: REACT_APP_API_URL
+        value: https://uprise-backend.onrender.com
