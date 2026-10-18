@@ -162,21 +162,54 @@ function MarketPage({ trading }) {
     setFilters((current) => ({ ...current, sort: nextSort }));
   };
 
+  const [mobileTab, setMobileTab] = useState('explore');
+
   const handleSelectStock = (stock) => {
     setSelectedStock(stock);
   };
 
   return (
     <div className="page markets-page">
-          <MarketHeader totalStocks={pagination.total || filteredStocks.length} lastUpdated={lastUpdated} />
+      <MarketHeader totalStocks={pagination.total || filteredStocks.length} lastUpdated={lastUpdated} />
+
+      {/* Mobile-only view tab switcher for screens < 768px */}
+      <div className="markets-mobile-nav" role="tablist" aria-label="Markets view switch">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mobileTab === 'explore'}
+          className={`markets-mobile-tab ${mobileTab === 'explore' ? 'active' : ''}`}
+          onClick={() => setMobileTab('explore')}
+        >
+          All Stocks & Table
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mobileTab === 'watchlist'}
+          className={`markets-mobile-tab ${mobileTab === 'watchlist' ? 'active' : ''}`}
+          onClick={() => setMobileTab('watchlist')}
+        >
+          Watchlist & Heatmap
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mobileTab === 'preview'}
+          className={`markets-mobile-tab ${mobileTab === 'preview' ? 'active' : ''}`}
+          onClick={() => setMobileTab('preview')}
+        >
+          {selectedStock ? selectedStock.symbol : 'Stock Details'}
+        </button>
+      </div>
 
       <div className="markets-discovery-layout">
-        <div className="markets-left-rail">
+        <div className={`markets-left-rail ${mobileTab === 'watchlist' ? 'mobile-visible' : 'mobile-hidden'}`}>
           <Watchlist trading={trading} onSelectStock={handleSelectStock} />
           <MarketHeatmap stocks={filteredStocks} />
         </div>
 
-        <div className="markets-center-stage">
+        <div className={`markets-center-stage ${mobileTab === 'explore' ? 'mobile-visible' : 'mobile-hidden'}`}>
           <MarketSearchBar
             query={query}
             onQueryChange={setQuery}
@@ -195,7 +228,7 @@ function MarketPage({ trading }) {
             ))}
           </div>
 
-            <MarketTable
+          <MarketTable
             rows={visibleStocks}
             loading={loading}
             watchedSymbols={watchedSymbols}
@@ -237,7 +270,7 @@ function MarketPage({ trading }) {
           <TopMovers stocks={filteredStocks} />
         </div>
 
-        <div className="markets-preview-rail">
+        <div className={`markets-preview-rail ${mobileTab === 'preview' ? 'mobile-visible' : 'mobile-hidden'}`}>
           <QuickPreview stock={selectedStock} trading={trading} />
         </div>
       </div>

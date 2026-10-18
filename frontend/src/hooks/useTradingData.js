@@ -122,6 +122,11 @@ export function useTradingData(authenticatedUser) {
   const [suggestion, setSuggestion] = useState(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [orderBook, setOrderBook] = useState({ bids: [], asks: [] });
+  const [orderBookLoading, setOrderBookLoading] = useState(false);
+  const [orderBookError, setOrderBookError] = useState(null);
+  const [orderBookLastUpdated, setOrderBookLastUpdated] = useState(null);
+  const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+  const [cancellingOrderId, setCancellingOrderId] = useState(null);
   const [recentTrades, setRecentTrades] = useState([]);
   const [marketQuotes, setMarketQuotes] = useState({});
   const [chartInterval, setChartInterval] = useState('5m');
@@ -132,6 +137,8 @@ export function useTradingData(authenticatedUser) {
   const activeUserId = authenticatedUser?.id;
   const [notifications, setNotifications] = useState([]);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationsError, setNotificationsError] = useState(null);
 
   const wsRef = useRef(null);
   const latestSelectionRef = useRef(null);
@@ -455,9 +462,12 @@ export function useTradingData(authenticatedUser) {
     if (!activeUserId) {
       setNotifications([]);
       setUnreadNotificationCount(0);
+      setNotificationsLoading(false);
       return;
     }
 
+    setNotificationsLoading(true);
+    setNotificationsError(null);
     try {
       const response = await axios.get(`${API_BASE_URL}/api/notifications`);
       const notifs = response.data.notifications || [];
@@ -465,6 +475,9 @@ export function useTradingData(authenticatedUser) {
       setUnreadNotificationCount(response.data.unreadCount ?? notifs.filter((n) => !n.read).length);
     } catch (error) {
       logApiFailure('fetch notifications', error);
+      setNotificationsError('Unable to sync live notifications with the server.');
+    } finally {
+      setNotificationsLoading(false);
     }
   }, [activeUserId]);
 
@@ -496,15 +509,27 @@ export function useTradingData(authenticatedUser) {
       return;
     }
 
+    setOrderBookLoading(true);
+    setOrderBookError(null);
     try {
       const response = await axios.get(`${API_BASE_URL}/api/orderbook/${symbol}`);
+      const data = response.data || {};
+      if (data.error) {
+        setOrderBookError(data.error);
+      }
       setOrderBook({
-        bids: response.data.bids || [],
-        asks: response.data.asks || []
+        symbol,
+        bids: data.bids || [],
+        asks: data.asks || []
       });
+      setOrderBookLastUpdated(new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
     } catch (error) {
       logApiFailure(`fetch order book for ${symbol}`, error);
-      setOrderBook({ bids: [], asks: [] });
+      const errMsg = error.response?.data?.error || error.message || 'Failed to fetch order book';
+      setOrderBookError(errMsg);
+      setOrderBook({ symbol, bids: [], asks: [] });
+    } finally {
+      setOrderBookLoading(false);
     }
   }, [selectedAsset]);
 
@@ -742,6 +767,8 @@ export function useTradingData(authenticatedUser) {
       setPositions([]);
       setOrders([]);
       setRecentTrades([]);
+      setNotifications([]);
+      setUnreadNotificationCount(0);
       return;
     }
 
@@ -750,7 +777,8 @@ export function useTradingData(authenticatedUser) {
     fetchPositions();
     fetchWatchlist();
     fetchRecentTrades();
-  }, [activeUserId, fetchPortfolio, fetchPositions, fetchRecentTrades, fetchUser, fetchWatchlist]);
+    fetchNotifications();
+  }, [activeUserId, fetchNotifications, fetchPortfolio, fetchPositions, fetchRecentTrades, fetchUser, fetchWatchlist]);
 
   useEffect(() => {
     selectedSymbolRef.current = selectedAsset?.symbol || null;
@@ -878,40 +906,95 @@ export function useTradingData(authenticatedUser) {
       fetchPortfolio(),
       fetchPositions(),
       fetchRecentTrades(),
+      fetchNotifications(),
       symbol ? fetchOrderBook(symbol) : Promise.resolve()
     ]);
-  }, [fetchOrderBook, fetchPortfolio, fetchPositions, fetchRecentTrades, fetchUser, selectedAsset?.symbol]);
+  }, [fetchNotifications, fetchOrderBook, fetchPortfolio, fetchPositions, fetchRecentTrades, fetchUser, selectedAsset?.symbol]);
 
   const handlePlaceOrder = async (side) => {
-    if (!selectedAsset) {
+    if (!selectedAsset || isSubmittingOrder) {
+      return;
+    }
+
+    const resolvedSide = side.toUpperCase();
+    const qty = parseInt(tradeQuantity, 10);
+    if (!qty || qty <= 0) {
+      flashTradeMessage({
+        type: 'error',
+        message: 'Order quantity must be a positive integer.'
+      });
+      return;
+    }
+
+    const resolvedPrice = orderType === 'MARKET'
+      ? assetInfo?.currentPrice || marketQuotes[selectedAsset.symbol]?.price
+      : parseFloat(tradePrice);
+
+    if (orderType === 'MARKET' && (!resolvedPrice || resolvedPrice <= 0)) {
+      flashTradeMessage({
+        type: 'error',
+        message: 'Market quote unavailable. Wait for real-time market price before placing a market order.'
+      });
+      return;
+    }
+
+    if (orderType === 'LIMIT' && (!resolvedPrice || resolvedPrice <= 0 || isNaN(resolvedPrice))) {
+      flashTradeMessage({
+        type: 'error',
+        message: 'Please specify a valid limit price greater than ₹0.'
+      });
       return;
     }
 
     try {
-      const resolvedPrice = orderType === 'MARKET'
-        ? assetInfo?.currentPrice || marketQuotes[selectedAsset.symbol]?.price
-        : parseFloat(tradePrice);
-
+      setIsSubmittingOrder(true);
       const response = await axios.post(`${API_BASE_URL}/api/orders`, {
         symbol: selectedAsset.symbol,
-        side: side.toUpperCase(),
+        side: resolvedSide,
         type: orderType,
         price: resolvedPrice,
-        quantity: parseInt(tradeQuantity, 10)
+        quantity: qty
       });
 
-      flashTradeMessage({
-        type: 'success',
-        message: `${side.toUpperCase()} order placed. Order ID: ${response.data.order.id}${response.data.trades?.length ? `, ${response.data.trades.length} trade(s) executed` : ''}`
-      });
+      const data = response.data || {};
+      const order = data.order || {};
+
+      if (data.success === false || order.status === 'CANCELLED') {
+        flashTradeMessage({
+          type: 'warning',
+          message: data.message || 'Market order cancelled: No counterparty liquidity available in the order book.'
+        });
+      } else if (order.status === 'PARTIALLY_FILLED') {
+        flashTradeMessage({
+          type: 'info',
+          message: `Order partially filled: ${order.filled_qty}/${order.quantity} units executed @ ₹${Number(order.avg_fill_price || resolvedPrice).toFixed(2)}. Remaining ${order.remaining_qty} units resting in book.`
+        });
+      } else if (order.status === 'FILLED') {
+        flashTradeMessage({
+          type: 'success',
+          message: `Order filled: ${order.quantity} units ${order.side} ${order.symbol} executed @ ₹${Number(order.avg_fill_price || resolvedPrice).toFixed(2)}.`
+        });
+      } else if (order.status === 'OPEN') {
+        flashTradeMessage({
+          type: 'info',
+          message: `Resting limit order placed: ${order.quantity} units ${order.side} ${order.symbol} @ ₹${Number(order.price || resolvedPrice).toFixed(2)}.`
+        });
+      } else {
+        flashTradeMessage({
+          type: 'info',
+          message: `${resolvedSide} order submitted (${order.status || 'SUBMITTED'}). Order ID: ${order.id || ''}`
+        });
+      }
 
       await refreshAfterOrder(selectedAsset.symbol);
     } catch (error) {
       logApiFailure(`place ${side} order for ${selectedAsset.symbol}`, error);
       flashTradeMessage({
         type: 'error',
-        message: error.response?.data?.error || 'Failed to place order'
+        message: error.response?.data?.error || error.message || 'Failed to place order'
       });
+    } finally {
+      setIsSubmittingOrder(false);
     }
   };
 
@@ -919,14 +1002,18 @@ export function useTradingData(authenticatedUser) {
     if (!order?.id || !order?.symbol) {
       return;
     }
+    if (cancellingOrderId === order.id) {
+      return;
+    }
 
     try {
-      await axios.post(`${API_BASE_URL}/api/orders/${order.id}/cancel`, {
+      setCancellingOrderId(order.id);
+      const response = await axios.post(`${API_BASE_URL}/api/orders/${order.id}/cancel`, {
         symbol: order.symbol
       });
       flashTradeMessage({
-        type: 'success',
-        message: `Order ${order.id} cancelled`
+        type: 'info',
+        message: response.data.message || `Order ${order.id} cancelled`
       });
       await refreshAfterOrder(order.symbol);
     } catch (error) {
@@ -935,8 +1022,10 @@ export function useTradingData(authenticatedUser) {
         type: 'error',
         message: error.response?.data?.error || 'Cancel failed'
       });
+    } finally {
+      setCancellingOrderId(null);
     }
-  }, [refreshAfterOrder]);
+  }, [cancellingOrderId, refreshAfterOrder]);
 
   const getTotalPortfolioValue = useCallback(() => {
     if (portfolio?.summary?.totalPortfolioValue) {
@@ -996,6 +1085,11 @@ export function useTradingData(authenticatedUser) {
     lookupSymbols,
     marketQuotes,
     orderBook,
+    orderBookLoading,
+    orderBookError,
+    orderBookLastUpdated,
+    isSubmittingOrder,
+    cancellingOrderId,
     orders,
     orderType,
     persistWatchlist,
@@ -1031,6 +1125,8 @@ export function useTradingData(authenticatedUser) {
     watchlistInput,
     notifications,
     unreadNotificationCount,
+    notificationsLoading,
+    notificationsError,
     fetchNotifications,
     markNotificationRead,
     markAllNotificationsRead

@@ -37,45 +37,73 @@ function DashboardWatchlist({ trading }) {
         />
       </div>
 
-      <div className="dashboard-watchlist-table">
-        <div className="dashboard-watchlist-head">
-          <span>Symbol</span>
-          <span>Price</span>
-          <span>Change %</span>
-          <span>Volume</span>
-          <span>High</span>
-          <span>Low</span>
-          <span>Trade</span>
-          <span>Remove</span>
-        </div>
-
+      <div className="table-responsive-container">
         {filteredAssets.length ? (
-          filteredAssets.map((asset) => {
-            const quote = trading.marketQuotes[asset.symbol] || {};
-            const changePercent = getQuoteChangePercent({ ...quote, changePercent: asset.changePercent });
-            const positive = changePercent >= 0;
-            const price = asset.livePrice || asset.price || quote.price || 0;
-            const high = quote.dayHigh || quote.high || price * 1.012;
-            const low = quote.dayLow || quote.low || price * 0.988;
+          <table className="financial-table dashboard-watchlist-table" aria-label="Watchlist instruments">
+            <thead>
+              <tr>
+                <th className="text-left">Symbol</th>
+                <th className="text-right">Price</th>
+                <th className="text-right">Change</th>
+                <th className="text-right">Volume</th>
+                <th className="text-right">Day Range</th>
+                <th className="text-center">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredAssets.map((asset) => {
+                const quote = trading.marketQuotes[asset.symbol] || {};
+                const changePercent = getQuoteChangePercent({ ...quote, changePercent: asset.changePercent });
+                const positive = changePercent >= 0;
+                const price = asset.livePrice || asset.price || quote.price || 0;
+                const high = quote.dayHigh || quote.high || price * 1.012;
+                const low = quote.dayLow || quote.low || price * 0.988;
 
-            return (
-              <div className="dashboard-watchlist-row" key={asset.symbol}>
-                <span>
-                  <strong>{asset.symbol}</strong>
-                  <small>{asset.name}</small>
-                </span>
-                <span>{formatAssetPrice(price, asset.assetType)}</span>
-                <span className={positive ? 'text-positive' : 'text-negative'}>
-                  {positive ? '+' : ''}{changePercent.toFixed(2)}%
-                </span>
-                <span>{Number(asset.volume || quote.volume || 0).toLocaleString('en-IN')}</span>
-                <span>{formatAssetPrice(high, asset.assetType)}</span>
-                <span>{formatAssetPrice(low, asset.assetType)}</span>
-                <button type="button" className="table-action" onClick={() => handleTrade(asset)}>Trade</button>
-                <button type="button" className="secondary-button" onClick={() => trading.removeWatchlistSymbol(asset.symbol)}>Remove</button>
-              </div>
-            );
-          })
+                return (
+                  <tr key={asset.symbol}>
+                    <td className="text-left">
+                      <div className="symbol-cell">
+                        <strong>{asset.symbol}</strong>
+                        <small className="text-muted">{asset.name || asset.symbol}</small>
+                      </div>
+                    </td>
+                    <td className="text-right tabular-nums font-semibold">
+                      {formatAssetPrice(price, asset.assetType)}
+                    </td>
+                    <td className="text-right tabular-nums">
+                      <span className={`metric-pill ${positive ? 'pill-positive' : 'pill-negative'}`}>
+                        {positive ? '+' : ''}{changePercent.toFixed(2)}%
+                      </span>
+                    </td>
+                    <td className="text-right tabular-nums text-muted text-sm">
+                      {Number(asset.volume || quote.volume || 0).toLocaleString('en-IN')}
+                    </td>
+                    <td className="text-right tabular-nums text-sm">
+                      <span>{formatAssetPrice(low, asset.assetType)}</span>
+                      <span className="text-muted"> – </span>
+                      <span>{formatAssetPrice(high, asset.assetType)}</span>
+                    </td>
+                    <td className="text-center">
+                      <div className="action-button-group">
+                        <button type="button" className="trade-cta-btn" onClick={() => handleTrade(asset)}>
+                          Trade
+                        </button>
+                        <button
+                          type="button"
+                          className="remove-icon-btn"
+                          title="Remove from watchlist"
+                          aria-label={`Remove ${asset.symbol}`}
+                          onClick={() => trading.removeWatchlistSymbol(asset.symbol)}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         ) : (
           <div className="empty-panel">No watchlist symbols match your search.</div>
         )}

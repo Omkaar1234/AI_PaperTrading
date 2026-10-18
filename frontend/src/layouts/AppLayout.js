@@ -3,6 +3,7 @@ import { Outlet, useLocation } from 'react-router-dom';
 import PageFrame from '../components/layout/PageFrame';
 import Sidebar from '../components/navigation/Sidebar';
 import TopNavigation from '../components/navigation/TopNavigation';
+import MobileNavigation from '../components/navigation/MobileNavigation';
 
 const PAGE_META = {
   '/dashboard': {
@@ -60,10 +61,12 @@ function AppLayout({ trading, auth }) {
 
       <div className="workspace-shell">
         <TopNavigation meta={meta} trading={trading} auth={auth} />
-        <PageFrame description={meta.description} tradeSuccess={trading.tradeSuccess}>
+        <PageFrame tradeSuccess={trading.tradeSuccess}>
           <Outlet />
         </PageFrame>
       </div>
+
+      <MobileNavigation />
     </div>
   );
 }

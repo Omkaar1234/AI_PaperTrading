@@ -1,6 +1,7 @@
 import React from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext';
+import { ThemeProvider } from './context/ThemeContext';
 import { ProtectedRoute, PublicOnlyRoute } from './auth/ProtectedRoute';
 import AppLayout from './layouts/AppLayout';
 import DashboardPage from './pages/DashboardPage';
@@ -11,6 +12,7 @@ import OrderBookPage from './pages/OrderBookPage';
 import OrdersPage from './pages/OrdersPage';
 import PositionsPage from './pages/PositionsPage';
 import PredictPage from './pages/PredictPage';
+import DisciplinePage from './pages/DisciplinePage';
 import RegisterPage from './pages/RegisterPage';
 import TradePage from './pages/TradePage';
 import { useTradingData } from './hooks/useTradingData';
@@ -42,6 +44,11 @@ function AppRoutes() {
           <Route path="/portfolio" element={<Navigate to="/positions" replace />} />
           <Route path="/prediction" element={<PredictPage trading={trading} />} />
           <Route path="/ai-analysis" element={<Navigate to="/prediction" replace />} />
+          <Route path="/discipline" element={<DisciplinePage trading={trading} />} />
+          <Route path="/habits" element={<Navigate to="/discipline" replace />} />
+          <Route path="/learning" element={<Navigate to="/discipline" replace />} />
+          <Route path="/gamification" element={<Navigate to="/discipline" replace />} />
+          <Route path="/academy" element={<Navigate to="/discipline" replace />} />
           <Route path="/settings" element={<Navigate to="/dashboard" replace />} />
         </Route>
       </Route>
@@ -53,9 +60,11 @@ function AppRoutes() {
 
 function App() {
   return (
-    <AuthProvider>
-      <AppRoutes />
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <AppRoutes />
+      </AuthProvider>
+    </ThemeProvider>
   );
 }
 

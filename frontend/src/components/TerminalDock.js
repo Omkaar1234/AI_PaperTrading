@@ -3,7 +3,7 @@ import { formatINR } from '../constants';
 import OrdersTable from './OrdersTable';
 import PositionsTable from './PositionsTable';
 
-function TerminalDock({ activeDockTab, cancelOrder, orders, positions, recentTrades = [], selectAsset, setActiveDockTab }) {
+function TerminalDock({ activeDockTab, cancelOrder, orders, positions, recentTrades = [], selectAsset, setActiveDockTab, cancellingOrderId = null }) {
   return (
     <section className="card terminal-dock">
       <div className="section-heading">
@@ -27,25 +27,33 @@ function TerminalDock({ activeDockTab, cancelOrder, orders, positions, recentTra
       {activeDockTab === 'positions' ? (
         <PositionsTable embedded positions={positions} selectAsset={selectAsset} />
       ) : activeDockTab === 'orders' ? (
-        <OrdersTable cancelOrder={cancelOrder} embedded orders={orders} />
+        <OrdersTable cancelOrder={cancelOrder} embedded orders={orders} cancellingOrderId={cancellingOrderId} />
       ) : (
-        <div className="data-table">
-          <div className="table-head neutral three">
-            <span>Time</span>
-            <span>Price</span>
-            <span>Qty</span>
-          </div>
-          {recentTrades.length ? (
-            recentTrades.map((trade, index) => (
-              <div className="table-row neutral three" key={trade.id || index}>
-                <span>{new Date(trade.executedAt || trade.timestamp).toLocaleTimeString()}</span>
-                <span>{formatINR(trade.price)}</span>
-                <span>{trade.quantity}</span>
-              </div>
-            ))
-          ) : (
-            <div className="empty-panel">No trade history yet.</div>
-          )}
+        <div className="ui-table-wrap">
+          <table className="ui-table semantic-table">
+            <thead>
+              <tr>
+                <th className="text-left">Time</th>
+                <th className="text-right">Price</th>
+                <th className="text-right">Qty</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recentTrades.length ? (
+                recentTrades.map((trade, index) => (
+                  <tr key={trade.id || index}>
+                    <td className="text-left tabular-nums text-muted text-sm">{new Date(trade.executedAt || trade.timestamp).toLocaleTimeString()}</td>
+                    <td className="text-right tabular-nums font-medium">{formatINR(trade.price)}</td>
+                    <td className="text-right tabular-nums">{trade.quantity}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan="3" className="text-center text-muted" style={{ padding: '24px' }}>No trade history yet.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       )}
     </section>

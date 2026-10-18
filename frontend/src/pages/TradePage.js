@@ -80,8 +80,8 @@ function TradePage({ trading }) {
       <section className="card symbol-search-card">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Unified search</p>
-            <h3>Trade Any NSE Stock Or Crypto Pair</h3>
+            <p className="eyebrow">Instrument Selection</p>
+            <h3>Search NSE Equities & Crypto</h3>
           </div>
         </div>
 
@@ -144,6 +144,7 @@ function TradePage({ trading }) {
           tradePrice={trading.tradePrice}
           tradeQuantity={trading.tradeQuantity}
           user={trading.user}
+          isSubmittingOrder={trading.isSubmittingOrder}
         />
       </div>
 
@@ -155,6 +156,7 @@ function TradePage({ trading }) {
         recentTrades={trading.recentTrades}
         selectAsset={trading.selectAsset}
         setActiveDockTab={trading.setActiveDockTab}
+        cancellingOrderId={trading.cancellingOrderId}
       />
     </div>
   );

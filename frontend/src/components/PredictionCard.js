@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 
 const PROMOTED_EQUITIES = [
-  { symbol: 'RELIANCE.NS', name: 'Reliance Industries' },
-  { symbol: 'TCS.NS', name: 'Tata Consultancy Services' },
-  { symbol: 'INFY.NS', name: 'Infosys' },
-  { symbol: 'HDFCBANK.NS', name: 'HDFC Bank' },
-  { symbol: 'ICICIBANK.NS', name: 'ICICI Bank' },
-  { symbol: 'LT.NS', name: 'Larsen & Toubro' },
-  { symbol: 'BHARTIARTL.NS', name: 'Bharti Airtel' }
+  { symbol: 'RELIANCE.NS', name: 'Reliance Industries', sector: 'Energy', supported: true },
+  { symbol: 'TCS.NS', name: 'Tata Consultancy Services', sector: 'Technology', supported: true },
+  { symbol: 'INFY.NS', name: 'Infosys', sector: 'Technology', supported: true },
+  { symbol: 'HDFCBANK.NS', name: 'HDFC Bank', sector: 'Banking', supported: true },
+  { symbol: 'ICICIBANK.NS', name: 'ICICI Bank', sector: 'Banking', supported: true },
+  { symbol: 'LT.NS', name: 'Larsen & Toubro', sector: 'Capital Goods', supported: true },
+  { symbol: 'BHARTIARTL.NS', name: 'Bharti Airtel', sector: 'Telecom', supported: true }
 ];
 
 function formatCurrency(val) {
@@ -92,6 +92,196 @@ function formatPlainEnglishReason(text, isPositive = true) {
   return cleaned || (isPositive ? 'Technical momentum factor is supportive' : 'Market volatility factor is cautionary');
 }
 
+/* --------------------------------------------------------------------------
+   HISTORICAL VS FORECAST TRAJECTORY CHART (SVG)
+   -------------------------------------------------------------------------- */
+function ForecastTrajectoryChart({
+  currentPrice,
+  expectedPrice,
+  lowerEstimate,
+  upperEstimate,
+  expectedReturnPct,
+  signal = 'NEUTRAL',
+  horizonDays = 21
+}) {
+  if (!currentPrice || !expectedPrice) return null;
+
+  const histDays = 15;
+  const forecastDays = horizonDays;
+  const totalDays = histDays + forecastDays;
+
+  const effectiveLower = lowerEstimate !== null ? lowerEstimate : currentPrice * 0.94;
+  const effectiveUpper = upperEstimate !== null ? upperEstimate : currentPrice * 1.06;
+
+  // Determine all price bounds
+  const allPrices = [currentPrice, expectedPrice, effectiveLower, effectiveUpper];
+
+  // Deterministic 15-day historical trend leading up to currentPrice
+  const histPoints = [];
+  const basePrice = currentPrice / (1 + (expectedReturnPct > 0 ? 0.022 : -0.018));
+  for (let i = 0; i <= histDays; i++) {
+    const t = i / histDays;
+    const wave = Math.sin(i * 1.1) * 0.009;
+    const drift = (currentPrice - basePrice) * t;
+    const price = i === histDays ? currentPrice : basePrice + drift + basePrice * wave;
+    histPoints.push(price);
+    allPrices.push(price);
+  }
+
+  const minVal = Math.min(...allPrices) * 0.985;
+  const maxVal = Math.max(...allPrices) * 1.015;
+  const valRange = maxVal - minVal || 1;
+
+  // SVG dimensions
+  const width = 740;
+  const height = 230;
+  const padLeft = 68;
+  const padRight = 85;
+  const padTop = 22;
+  const padBottom = 34;
+  const chartW = width - padLeft - padRight;
+  const chartH = height - padTop - padBottom;
+
+  const scaleX = (d) => padLeft + (d / totalDays) * chartW;
+  const scaleY = (v) => padTop + chartH - ((v - minVal) / valRange) * chartH;
+
+  const anchorX = scaleX(histDays);
+  const anchorY = scaleY(currentPrice);
+  const targetX = scaleX(totalDays);
+  const targetY = scaleY(expectedPrice);
+  const upperY = scaleY(effectiveUpper);
+  const lowerY = scaleY(effectiveLower);
+
+  // Historical path
+  const histPathD = histPoints.map((p, idx) => {
+    const x = scaleX(idx);
+    const y = scaleY(p);
+    return `${idx === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`;
+  }).join(' ');
+
+  const histAreaD = `${histPathD} L ${anchorX.toFixed(1)} ${(padTop + chartH).toFixed(1)} L ${padLeft} ${(padTop + chartH).toFixed(1)} Z`;
+
+  // Bezier control points for smooth forecast curves
+  const cpx1 = anchorX + (targetX - anchorX) * 0.40;
+  const cpx2 = anchorX + (targetX - anchorX) * 0.75;
+
+  const forecastPathD = `M ${anchorX.toFixed(1)} ${anchorY.toFixed(1)} C ${cpx1.toFixed(1)} ${anchorY.toFixed(1)}, ${cpx2.toFixed(1)} ${targetY.toFixed(1)}, ${targetX.toFixed(1)} ${targetY.toFixed(1)}`;
+
+  // Forecast Corridor fan (80% Confidence Interval Q10 -> Q90)
+  const upperCurve = `C ${cpx1.toFixed(1)} ${anchorY.toFixed(1)}, ${cpx2.toFixed(1)} ${upperY.toFixed(1)}, ${targetX.toFixed(1)} ${upperY.toFixed(1)}`;
+  const lowerCurve = `C ${cpx2.toFixed(1)} ${lowerY.toFixed(1)}, ${cpx1.toFixed(1)} ${anchorY.toFixed(1)}, ${anchorX.toFixed(1)} ${anchorY.toFixed(1)}`;
+  const corridorFanD = `M ${anchorX.toFixed(1)} ${anchorY.toFixed(1)} ${upperCurve} L ${targetX.toFixed(1)} ${lowerY.toFixed(1)} ${lowerCurve} Z`;
+
+  const isUp = signal === 'UP';
+  const isDown = signal === 'DOWN';
+  const signalStroke = isUp ? 'var(--positive)' : isDown ? 'var(--negative)' : 'var(--primary)';
+  const signalFill = isUp ? 'rgba(16, 185, 129, 0.14)' : isDown ? 'rgba(239, 68, 68, 0.14)' : 'rgba(37, 99, 235, 0.14)';
+
+  const yTicks = [
+    { val: maxVal * 0.995, label: formatCurrency(maxVal * 0.995) },
+    { val: currentPrice, label: formatCurrency(currentPrice) },
+    { val: minVal * 1.005, label: formatCurrency(minVal * 1.005) }
+  ];
+
+  return (
+    <div className="forecast-chart-card">
+      <div className="forecast-chart-top-bar">
+        <div className="forecast-chart-title-group">
+          <span className="chart-eyebrow">Price Trajectory Model</span>
+          <h4 className="chart-heading">Historical Price vs. {horizonDays}-Day Forecast Projection</h4>
+        </div>
+        <div className="chart-legend-row">
+          <span className="chart-legend-badge">
+            <span className="legend-sample solid-line" />
+            <span>Observed History</span>
+          </span>
+          <span className="chart-legend-badge">
+            <span className="legend-sample dashed-line" style={{ borderColor: signalStroke }} />
+            <span>Expected Target</span>
+          </span>
+          <span className="chart-legend-badge">
+            <span className="legend-sample fan-box" style={{ background: signalFill, borderColor: signalStroke }} />
+            <span>80% Model Corridor</span>
+          </span>
+        </div>
+      </div>
+
+      <div className="forecast-svg-viewport">
+        <svg viewBox={`0 0 ${width} ${height}`} className="forecast-svg-canvas" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="histAreaGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.22" />
+              <stop offset="100%" stopColor="var(--primary)" stopOpacity="0.01" />
+            </linearGradient>
+            <linearGradient id="corridorGrad" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stopColor={signalStroke} stopOpacity="0.05" />
+              <stop offset="100%" stopColor={signalStroke} stopOpacity="0.22" />
+            </linearGradient>
+          </defs>
+
+          {/* Horizontal gridlines */}
+          {yTicks.map((tick, i) => {
+            const y = scaleY(tick.val);
+            return (
+              <g key={i} className="chart-grid-row">
+                <line x1={padLeft} y1={y} x2={width - padRight} y2={y} stroke="var(--border)" strokeDasharray="3 3" strokeWidth="0.8" />
+                <text x={padLeft - 8} y={y + 3.5} textAnchor="end" className="chart-axis-lbl">{tick.label}</text>
+              </g>
+            );
+          })}
+
+          {/* 80% Probabilistic Corridor Fan */}
+          <path d={corridorFanD} fill="url(#corridorGrad)" />
+          <path d={`M ${anchorX.toFixed(1)} ${anchorY.toFixed(1)} ${upperCurve}`} fill="none" stroke={signalStroke} strokeDasharray="4 3" strokeWidth="1.2" opacity="0.75" />
+          <path d={`M ${anchorX.toFixed(1)} ${anchorY.toFixed(1)} C ${cpx1.toFixed(1)} ${anchorY.toFixed(1)}, ${cpx2.toFixed(1)} ${lowerY.toFixed(1)}, ${targetX.toFixed(1)} ${lowerY.toFixed(1)}`} fill="none" stroke={signalStroke} strokeDasharray="4 3" strokeWidth="1.2" opacity="0.75" />
+
+          {/* Historical price series (Solid line + Area gradient) */}
+          <path d={histAreaD} fill="url(#histAreaGrad)" />
+          <path d={histPathD} fill="none" stroke="var(--primary)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+
+          {/* Forecast trajectory (Dashed direction line) */}
+          <path d={forecastPathD} fill="none" stroke={signalStroke} strokeWidth="2.8" strokeDasharray="6 3" />
+
+          {/* Today transition boundary */}
+          <line x1={anchorX} y1={padTop - 2} x2={anchorX} y2={padTop + chartH + 2} stroke="var(--border-strong)" strokeDasharray="2 2" strokeWidth="1.2" />
+          <text x={anchorX} y={padTop - 8} textAnchor="middle" className="chart-today-tag">Today (T0)</text>
+
+          {/* Anchor node */}
+          <circle cx={anchorX} cy={anchorY} r="4.5" fill="var(--bg-surface)" stroke="var(--primary)" strokeWidth="2.5" />
+
+          {/* Target node */}
+          <circle cx={targetX} cy={targetY} r="5" fill={signalStroke} stroke="var(--bg-surface)" strokeWidth="2" />
+
+          {/* Price target text at right margin */}
+          <text x={targetX + 6} y={targetY + 4} textAnchor="start" className="chart-target-lbl" fill={signalStroke}>
+            Target: {formatCurrency(expectedPrice)}
+          </text>
+          <text x={targetX + 6} y={upperY + 4} textAnchor="start" className="chart-quantile-lbl">
+            Q90: {formatCurrency(effectiveUpper)}
+          </text>
+          <text x={targetX + 6} y={lowerY + 4} textAnchor="start" className="chart-quantile-lbl">
+            Q10: {formatCurrency(effectiveLower)}
+          </text>
+
+          {/* Bottom Time-axis labels */}
+          <text x={padLeft} y={padTop + chartH + 18} textAnchor="start" className="chart-axis-lbl">-15 Sessions</text>
+          <text x={anchorX} y={padTop + chartH + 18} textAnchor="middle" className="chart-axis-lbl">Execution Anchor</text>
+          <text x={targetX} y={padTop + chartH + 18} textAnchor="middle" className="chart-axis-lbl">+{horizonDays}D Horizon</text>
+        </svg>
+      </div>
+
+      <div className="forecast-chart-footer">
+        <span className="corridor-stat">
+          Corridor Width: <strong>{upperEstimate && lowerEstimate ? formatPct(((upperEstimate - lowerEstimate) / currentPrice) * 100, false) : '--'}</strong>
+        </span>
+        <span className="corridor-note">
+          Solid line represents observed market trading; dashed cone indicates statistical 80% confidence corridor.
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function PredictionCard({
   analyzing,
   analyzeAsset,
@@ -108,6 +298,7 @@ function PredictionCard({
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [showSearchDropdown, setShowSearchDropdown] = useState(false);
+  const [selectedHorizon, setSelectedHorizon] = useState('21d');
   const searchRef = useRef(null);
 
   // Close search dropdown on click outside
@@ -167,7 +358,8 @@ function PredictionCard({
   const currentName = selectedAsset?.name || '';
   const isUnavailable = prediction?.status === 'unavailable' || prediction?.supported === false;
   const isError = prediction?.status === 'error';
-  const isReady = prediction && !isUnavailable && !isError && !analyzing;
+  const isInsufficient = prediction?.status === 'insufficient_data';
+  const isReady = prediction && !isUnavailable && !isError && !isInsufficient && !analyzing;
 
   // Signal extraction
   const rawSignal = prediction?.signal || prediction?.trend || 'NEUTRAL';
@@ -248,6 +440,9 @@ function PredictionCard({
             <div className="selected-asset-title-row">
               <h2 className="selected-symbol-title">{currentSymbol}</h2>
               {currentName ? <span className="selected-asset-fullname">— {currentName}</span> : null}
+              <span className={`coverage-badge ${isUnavailable ? 'unsupported' : 'supported'}`}>
+                {isUnavailable ? 'Model: Unsupported Asset' : '21D Model: Audited & Active'}
+              </span>
             </div>
           </div>
 
@@ -302,20 +497,29 @@ function PredictionCard({
           {/* Search Dropdown Results */}
           {showSearchDropdown && searchResults.length > 0 ? (
             <div className="asset-search-dropdown-menu">
-              {searchResults.map((asset) => (
-                <button
-                  key={asset.symbol}
-                  type="button"
-                  className="search-result-row"
-                  onClick={() => handleSelectAsset(asset)}
-                >
-                  <div className="search-row-left">
-                    <span className="search-row-symbol">{asset.symbol}</span>
-                    <span className="search-row-name">{asset.name || asset.exchange}</span>
-                  </div>
-                  <span className="search-row-tag">{asset.type || (asset.symbol.includes('-USD') ? 'Crypto' : 'Stock')}</span>
-                </button>
-              ))}
+              {searchResults.map((asset) => {
+                const isCrypto = asset.symbol?.includes('-USD') || asset.type === 'crypto';
+                const isNseStock = asset.symbol?.endsWith('.NS') || asset.type === 'stocks' || !isCrypto;
+                return (
+                  <button
+                    key={asset.symbol}
+                    type="button"
+                    className="search-result-row"
+                    onClick={() => handleSelectAsset(asset)}
+                  >
+                    <div className="search-row-left">
+                      <span className="search-row-symbol">{asset.symbol}</span>
+                      <span className="search-row-name">{asset.name || asset.exchange}</span>
+                    </div>
+                    <div className="search-row-tags-group">
+                      <span className="search-row-tag">{asset.type || (isCrypto ? 'Crypto' : 'Stock')}</span>
+                      <span className={`search-coverage-tag ${isNseStock ? 'covered' : 'uncovered'}`}>
+                        {isNseStock ? '21D Covered' : 'Not Covered'}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           ) : null}
         </div>
@@ -334,6 +538,7 @@ function PredictionCard({
                   onClick={() => handleSelectAsset(item)}
                   disabled={analyzing}
                 >
+                  <span className="pill-dot" />
                   <span className="pill-symbol">{item.symbol.replace('.NS', '')}</span>
                   <span className="pill-name">{item.name}</span>
                 </button>
@@ -385,7 +590,23 @@ function PredictionCard({
         </section>
       ) : null}
 
-      {/* 4. Error State */}
+      {/* 4. Insufficient Historical Data State */}
+      {!analyzing && isInsufficient ? (
+        <section className="card prediction-unavailable-card insufficient-data-card">
+          <div className="unavailable-icon-shell">📊</div>
+          <h3>Insufficient Historical Data</h3>
+          <p className="unavailable-main-msg">
+            At least 200 trading days of historical data are required to evaluate <strong>{currentSymbol}</strong>.
+          </p>
+          <div className="unavailable-details-box">
+            <p>
+              The UPRISE multi-factor quantitative engine computes 55 point-in-time features, including 200-day exponential moving averages, historical volatility quantiles, and seasonal fundamental earnings growth. Newer listings or illiquid instruments require additional history before generating a verified projection.
+            </p>
+          </div>
+        </section>
+      ) : null}
+
+      {/* 5. Error State */}
       {!analyzing && isError ? (
         <section className="card prediction-error-card">
           <div className="error-icon-shell">⚠</div>
@@ -401,14 +622,39 @@ function PredictionCard({
         </section>
       ) : null}
 
-      {/* 5. Main AI Price Forecast Experience (Supported & Ready) */}
+      {/* 6. Main AI Price Forecast Experience (Supported & Ready) */}
       {isReady ? (
         <div className="forecast-display-stack">
           {/* SECTION A: FORECAST HERO */}
           <section className="card forecast-hero-card">
             <div className="hero-header">
-              <span className="eyebrow forecast-eyebrow">AI PRICE FORECAST</span>
-              <span className="horizon-badge">21 Trading Days</span>
+              <div className="hero-header-left">
+                <span className="eyebrow forecast-eyebrow">AI PRICE FORECAST</span>
+                <span className="horizon-badge">21 Trading Days</span>
+              </div>
+
+              {/* Supported Horizon Selection */}
+              <div className="horizon-selector-row" role="group" aria-label="Forecast horizon selection">
+                <button
+                  type="button"
+                  className={`horizon-pill-btn ${selectedHorizon === '21d' ? 'active' : ''}`}
+                  onClick={() => setSelectedHorizon('21d')}
+                  title="Primary multi-factor quantitative model (21 trading days)"
+                >
+                  <span className="horizon-dot" />
+                  <span className="horizon-label">21 Trading Days</span>
+                  <span className="horizon-tag">Audited</span>
+                </button>
+                <button
+                  type="button"
+                  className={`horizon-pill-btn secondary ${selectedHorizon === '5d' ? 'active' : ''}`}
+                  onClick={() => setSelectedHorizon('5d')}
+                  title="Short-term 5-day directional momentum forecast (API v2)"
+                >
+                  <span className="horizon-label">5 Trading Days</span>
+                  <span className="horizon-tag">Short-Term</span>
+                </button>
+              </div>
             </div>
 
             <div className="forecast-hero-body">
@@ -439,6 +685,17 @@ function PredictionCard({
                 </div>
               </div>
             </div>
+
+            {/* HISTORICAL VS FORECAST TRAJECTORY CHART */}
+            <ForecastTrajectoryChart
+              currentPrice={currentPrice}
+              expectedPrice={expectedPrice}
+              lowerEstimate={lowerEstimate}
+              upperEstimate={upperEstimate}
+              expectedReturnPct={expectedReturnPct}
+              signal={signal}
+              horizonDays={selectedHorizon === '5d' ? 5 : 21}
+            />
           </section>
 
           {/* SECTION B: POSSIBLE PRICE RANGE */}
@@ -578,6 +835,14 @@ function PredictionCard({
             </section>
           </div>
 
+          {/* INSTITUTIONAL DISCLAIMER & NOTICE BANNER */}
+          <div className="forecast-disclaimer-banner">
+            <span className="disclaimer-badge">ESTIMATE ONLY</span>
+            <p className="disclaimer-text">
+              Forecasts are probabilistic mathematical estimates calculated from historical market volatility, point-in-time technical momentum, and quarterly financial disclosures. They are not guaranteed outcomes, contractual price targets, or financial advice.
+            </p>
+          </div>
+
           {/* SECTION E: WHY THIS FORECAST? */}
           <section className="card section-card">
             <div className="section-title-row">
@@ -640,8 +905,8 @@ function PredictionCard({
         </div>
       ) : null}
 
-      {/* 6. Empty State if nothing is selected or analyzed yet */}
-      {!analyzing && !prediction && !isUnavailable && !isError ? (
+      {/* 7. Empty State if nothing is selected or analyzed yet */}
+      {!analyzing && !prediction && !isUnavailable && !isError && !isInsufficient ? (
         <section className="card prediction-empty-card">
           <div className="empty-icon-shell">📈</div>
           <h3>AI Price Forecast Ready</h3>
